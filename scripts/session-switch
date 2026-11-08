@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Preserve the verified Bazzite transition mechanism; guard before any changes.
+set -euo pipefail
+
+if (( $# != 1 )); then
+    echo 'Usage: session-switch {desktop|steam|heroic}' >&2
+    exit 1
+fi
+case "$1" in
+    desktop)
+        if [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* ]]; then
+            echo 'Already in KDE Desktop Mode'
+            exit 0
+        fi
+        ;;
+    steam) SESSION='gamescope-session-ogui-steam.desktop' ;;
+    heroic) SESSION='gamescope-session-heroic.desktop' ;;
+    *) echo 'Usage: session-switch {desktop|steam|heroic}' >&2; exit 1 ;;
+esac
+
+activity_helper="${SESSION_SWITCH_ACTIVITY_HELPER:-$HOME/.local/bin/session-game-activity}"
+if "$activity_helper" --check; then
+    :
+else
+    status=$?
+    echo 'Session switch refused; no session selection or logout was performed.' >&2
+    if command -v notify-send >/dev/null 2>&1; then
+        timeout 2s notify-send --app-name='HSTN' \
+            'Session switch blocked' \
+            'Close running games and try again. Check terminal output if the activity check failed.' \
+            >/dev/null 2>&1 || true
+    fi
+    exit "$status"
+fi
+
+# Keep closed-lid handling inhibited while the old desktop's power manager exits
+# and the next session initializes. The bounded user unit survives this logout.
+transition_guard="${SESSION_SWITCH_TRANSITION_GUARD:-$HOME/.local/bin/session-transition-guard.py}"
+if ! /usr/bin/python3 -B "$transition_guard" start; then
+    echo 'Session switch refused; temporary lid-switch protection could not be acquired.' >&2
+    exit 1
+fi
+
+if [[ "$1" == desktop ]]; then
+    exec steamosctl switch-to-desktop-mode
+fi
+
+busctl call --system \
+    com.steampowered.SteamOSManager1 \
+    /com/steampowered/SteamOSManager1 \
+    com.steampowered.SteamOSManager1.RootManager \
+    SetTemporarySession s "$SESSION"
+
+echo "Switching to $SESSION"
+if systemctl --user is-active --quiet gamescope-session-plus@heroic.service; then
+    systemctl --user stop gamescope-session-plus@heroic.service
+elif systemctl --user is-active --quiet gamescope-session-plus@ogui-steam.service; then
+    systemctl --user stop gamescope-session-plus@ogui-steam.service
+elif [[ "${XDG_CURRENT_DESKTOP:-}" == *KDE* ]]; then
+    qdbus-qt6 org.kde.Shutdown /Shutdown org.kde.Shutdown.logout
+else
+    echo 'Session selected. Log out to switch.'
+fi

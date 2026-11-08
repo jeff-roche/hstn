@@ -1,0 +1,3 @@
+#!/usr/bin/bash
+
+CLIENTCMD="$HOME/.local/bin/heroic-session-with-overlay"

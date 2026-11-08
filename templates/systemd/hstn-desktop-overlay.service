@@ -1,0 +1,19 @@
+[Unit]
+Description=HSTN controller overlay (KDE Desktop)
+PartOf=graphical-session.target
+After=graphical-session.target
+Conflicts=session-switch-overlay.service
+ConditionPathExists=%t/hstn-desktop-overlay.env
+
+[Service]
+Type=dbus
+BusName=org.hstn.DesktopOverlay
+EnvironmentFile=%t/hstn-desktop-overlay.env
+Environment=SESSION_SWITCH_REQUIRE_INPUT_GUARD=1
+Environment=SESSION_SWITCH_INPUT_TARGET=ds5-single
+Environment=SESSION_SWITCH_DESKTOP_MODE=1
+# Setup supplies the current, quoted source location.
+ExecStart=/usr/bin/python3 -B "@ROOT@/prototypes/session-overlay.py" --desktop --start-hidden --manage-input --timeout 0
+KillMode=mixed
+TimeoutStopSec=30
+Restart=no

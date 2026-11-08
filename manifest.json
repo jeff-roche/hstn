@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "assets_dir": "assets/artwork",
+  "destinations": {
+    "heroic": {
+      "title": "Switch to Heroic",
+      "images": {
+        "portrait": "switch-to-heroic-portrait.png",
+        "wide": "switch-to-heroic-wide.png",
+        "icon": "switch-to-heroic-icon.png",
+        "details_background": "switch-to-heroic-details-background.png",
+        "official_icon": "heroic-official-icon.png"
+      }
+    },
+    "steam": {
+      "title": "Switch to Steam",
+      "images": {
+        "portrait": "switch-to-steam-portrait.png",
+        "wide": "switch-to-steam-wide.png",
+        "icon": "switch-to-steam-icon.png"
+      }
+    },
+    "desktop": {
+      "title": "Switch to Desktop",
+      "images": {
+        "portrait": "switch-to-desktop-portrait.png",
+        "wide": "switch-to-desktop-wide.png",
+        "icon": "switch-to-desktop-icon.png"
+      }
+    }
+  },
+  "launchers": {
+    "steam": {
+      "entries": {
+        "heroic": {
+          "executable": "switch-to-heroic",
+          "slots": {
+            "portrait": "portrait",
+            "wide": "wide",
+            "details_background": "details_background",
+            "icon": "official_icon",
+            "logo": "official_icon"
+          },
+          "logo_position": "default"
+        }
+      }
+    },
+    "heroic": {
+      "entries": {
+        "steam": {
+          "executable": "switch-to-steam",
+          "slots": {
+            "art_cover": "wide",
+            "art_square": "portrait"
+          }
+        },
+        "desktop": {
+          "executable": "switch-to-desktop",
+          "slots": {
+            "art_cover": "wide",
+            "art_square": "portrait"
+          }
+        }
+      }
+    }
+  },
+  "notes": [
+    "Heroic art_square intentionally uses the portrait, not the square icon.",
+    "Custom text-free doorway icons remain available in destinations.images.icon.",
+    "Steam icon and logo intentionally use the official Heroic icon; logo placement uses Steam defaults."
+  ]
+}

@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec "$HOME/.local/bin/gamescope-client-with-overlay" "$HOME/.local/bin/heroic-gamescope"

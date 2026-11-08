@@ -1,0 +1,15 @@
+[Unit]
+Description=HSTN controller overlay (Gamescope sessions)
+PartOf=gamescope-session-plus@heroic.service gamescope-session-plus@ogui-steam.service gamescope-session-plus@steam.service
+After=gamescope-session-plus@heroic.service gamescope-session-plus@ogui-steam.service gamescope-session-plus@steam.service
+Conflicts=hstn-desktop-overlay.service
+After=hstn-desktop-overlay.service
+ConditionPathExists=%t/session-switch-overlay.env
+
+[Service]
+Type=simple
+EnvironmentFile=%t/session-switch-overlay.env
+ExecStart=/usr/bin/python3 %h/.local/bin/session-overlay-prototype --start-hidden --manage-input --timeout 0
+KillMode=mixed
+TimeoutStopSec=30
+Restart=no

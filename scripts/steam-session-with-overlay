@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Wrap the exact client command supplied by the packaged Steam session."""
+import os
+from pathlib import Path
+import shlex
+import sys
+import subprocess
+import importlib.util
+
+
+def permanent_guard_active():
+    path = Path(__file__).resolve().with_name('input-guard-status.py')
+    if not path.exists():
+        return False
+    spec = importlib.util.spec_from_file_location('steam_guard_status', path)
+    status = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(status)
+    return status.permanent_guard_active()
+
+
+def main():
+    command = shlex.split(os.environ.get('SESSION_SWITCH_STEAM_CLIENTCMD', ''))
+    if not command:
+        print('Missing packaged Steam client command', file=sys.stderr)
+        return 2
+    if Path(command[0]).name == 'opengamepadui':
+        # Do not race its startup and steal controller interception/Guide.
+        print('OpenGamepadUI owns this session; custom overlay not started.', file=sys.stderr)
+        os.execvp(command[0], command)
+    marker = Path.home() / '.local/state/session-switch/steam-overlay-diagnostic.once'
+    diagnostic = False
+    try:
+        marker.unlink()
+        diagnostic = True
+    except FileNotFoundError:
+        pass
+    if diagnostic:
+        os.environ['SESSION_SWITCH_STEAM_DIAGNOSTIC'] = '1'
+        collector = Path(__file__).resolve().with_name('collect-controller-routes.py')
+        subprocess.Popen([sys.executable, str(collector), '--parent', str(os.getpid())],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        print('One-session Steam overlay diagnostic enabled.', file=sys.stderr)
+    enabled = os.environ.get('SESSION_SWITCH_ENABLE_STEAM_OVERLAY')
+    if not diagnostic and enabled != '1' and (enabled == '0' or not permanent_guard_active()):
+        print('Custom Steam overlay disabled: permanent input guard unavailable or explicitly disabled.', file=sys.stderr)
+        os.execvp(command[0], command)
+    os.environ['SESSION_SWITCH_REQUIRE_INPUT_GUARD'] = '1'
+    wrapper = str(Path.home() / '.local/bin/gamescope-client-with-overlay')
+    os.execv(wrapper, [wrapper, *command])
+
+
+if __name__ == '__main__':
+    sys.exit(main())

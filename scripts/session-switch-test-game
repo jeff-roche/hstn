@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# A lightweight dummy game. End it with the launcher's Stop action or Ctrl+C.
+set -u
+
+sleep_pid=''
+cleanup() {
+    if [[ -n "$sleep_pid" ]]; then
+        kill "$sleep_pid" 2>/dev/null || true
+        wait "$sleep_pid" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+
+echo "HSTN Test Game running (PID $$). Use the launcher's Stop action to exit."
+while :; do
+    sleep 1 &
+    sleep_pid=$!
+    wait "$sleep_pid" || true
+    sleep_pid=''
+done

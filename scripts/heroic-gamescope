@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -u
+
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}"
+mkdir -p "$state_dir"
+LOG="$state_dir/heroic-gamescope.log"
+exec >>"$LOG" 2>&1
+
+echo "=== New Heroic session: $(date) ==="
+echo "DISPLAY=${DISPLAY:-unset}"
+
+flatpak run com.heroicgameslauncher.hgl \
+    --console --fullscreen --ozone-platform=x11 &
+
+heroic_pid=$!
+found=0
+
+for ((i=0; i<45; i++)); do
+    # Find X11 windows owned by Heroic.
+    while read -r wid; do
+        class=$(xprop -display "$DISPLAY" \
+            -id "$wid" WM_CLASS 2>/dev/null)
+
+        [[ "${class,,}" == *heroic* ]] || continue
+
+        info=$(xwininfo -display "$DISPLAY" \
+            -id "$wid" -stats 2>/dev/null)
+
+        width=$(awk '/^[[:space:]]*Width:/ {print $2}' <<< "$info")
+        height=$(awk '/^[[:space:]]*Height:/ {print $2}' <<< "$info")
+
+        [[ "$width" =~ ^[0-9]+$ ]] || continue
+        [[ "$height" =~ ^[0-9]+$ ]] || continue
+
+        echo "Heroic window $wid: ${width}x${height}"
+
+        # Ignore small helper windows.
+        (( width >= 100 && height >= 100 )) || continue
+
+        # Register this as an application window.
+        xprop -display "$DISPLAY" -id "$wid" \
+            -f STEAM_GAME 32c -set STEAM_GAME 1 || continue
+
+        # Read the existing Gamescope layer order.
+        root_prop=$(xprop -display "$DISPLAY" -root \
+            GAMESCOPECTRL_BASELAYER_APPID 2>/dev/null)
+
+        original=""
+        if [[ "$root_prop" == *" = "* ]]; then
+            original="${root_prop#*=}"
+            original="${original//[[:space:]]/}"
+        fi
+
+        # Put our application first in the layer list.
+        layers="1"
+        [[ -n "$original" ]] && layers="1,$original"
+
+        xprop -display "$DISPLAY" -root \
+            -f GAMESCOPECTRL_BASELAYER_APPID 32co \
+            -set GAMESCOPECTRL_BASELAYER_APPID "$layers" || continue
+
+        echo "Selected Heroic window: $wid"
+        xprop -display "$DISPLAY" -id "$wid" STEAM_GAME
+        xprop -display "$DISPLAY" -root GAMESCOPECTRL_BASELAYER_APPID
+
+        found=1
+        break
+    done < <(
+        xwininfo -display "$DISPLAY" -root -tree 2>/dev/null |
+        awk '$1 ~ /^0x[0-9a-fA-F]+$/ {print $1}'
+    )
+
+    (( found )) && break
+    sleep 1
+done
+
+if (( ! found )); then
+    echo "Failed to find a suitable Heroic window"
+    xwininfo -display "$DISPLAY" -root -tree 2>&1 | tail -n 60
+fi
+
+wait "$heroic_pid"

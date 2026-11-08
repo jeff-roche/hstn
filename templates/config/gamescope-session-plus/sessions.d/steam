@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+# Preserve the packaged session and all its environment/hooks.
+. /usr/share/gamescope-session-plus/sessions.d/steam
+export SESSION_SWITCH_STEAM_CLIENTCMD="$CLIENTCMD"
+CLIENTCMD="$HOME/.local/bin/steam-session-with-overlay"

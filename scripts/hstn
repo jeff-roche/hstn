@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""HSTN (pronounced Houston): mission control for Linux gaming sessions."""
+import os
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+COMMANDS = {
+    'install': ROOT / 'installer/install.py',
+    'setup': ROOT / 'installer/install.py',
+    'uninstall': ROOT / 'installer/install.py',
+    'desktop': ROOT / 'scripts/desktop-integration.py',
+    'doctor': ROOT / 'scripts/doctor.py',
+    'switch': ROOT / 'scripts/session-switch',
+    'configure': ROOT / 'scripts/configure-launchers.py',
+    'activity': ROOT / 'scripts/game-activity.py',
+    'overlay': ROOT / 'prototypes/session-overlay.py',
+}
+HELP = """HSTN (pronounced Houston) — Mission control for Linux gaming sessions.
+
+Usage: hstn <command> [arguments]
+
+Commands:
+  install [options]            Install or upgrade HSTN (standalone distribution)
+  setup [options]              Configure a native package for this user
+  uninstall [options]          Restore files owned by the installer
+  desktop {install,remove,open,hide,status}  Set up or control KDE Desktop HSTN
+  doctor [--json]              Inspect setup without changing anything
+  switch {steam|heroic|desktop}  Switch sessions; running games block switching
+  configure [options]          Configure launcher shortcuts and artwork
+  activity [--check]           Inspect running games without switching
+  overlay [options]            Run the controller overlay (requires session setup)
+
+Use hstn <command> --help for Python tool options.
+Use hstn overlay --demo for an inert overlay demo.
+The overlay offers explicit close-and-switch confirmation; the switch command
+never closes running games. Close selected launchers before configuring them.
+"""
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] in ('-h', '--help'):
+        print(HELP)
+        return 0
+    command = args.pop(0)
+    if command not in COMMANDS:
+        print(f'HSTN: unknown command {command!r}. Use hstn --help.', file=sys.stderr)
+        return 2
+    if command == 'switch' and args in (['-h'], ['--help']):
+        print('Usage: hstn switch {steam|heroic|desktop}')
+        return 0
+    script = COMMANDS[command]
+    if command in ('setup', 'uninstall'):
+        args.insert(0, command)
+    interpreter = '/usr/bin/bash' if command == 'switch' else sys.executable
+    os.execv(interpreter, [interpreter, str(script), *args])
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

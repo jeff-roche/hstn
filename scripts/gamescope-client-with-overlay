@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Starts an overlay around the supplied Gamescope client; no compositor is started.
+set -u
+umask 077
+
+if (( $# == 0 )); then
+    echo "Usage: gamescope-client-with-overlay COMMAND [ARG ...]" >&2
+    exit 2
+fi
+
+: "${XDG_RUNTIME_DIR:?Missing user runtime directory}"
+: "${DISPLAY:?This wrapper must run inside the Gamescope session}"
+environment_file="$XDG_RUNTIME_DIR/session-switch-overlay.env"
+child=''
+window_focus_pid=''
+heroic_diagnostic=0
+if [[ "$(basename -- "$1")" == heroic-gamescope && -f "$HOME/.local/state/session-switch/heroic-input-diagnostic.once" ]]; then
+    rm -f -- "$HOME/.local/state/session-switch/heroic-input-diagnostic.once"
+    heroic_diagnostic=1
+fi
+
+cleanup() {
+    if [[ -n "$window_focus_pid" ]]; then
+        kill "$window_focus_pid" 2>/dev/null || true
+        wait "$window_focus_pid" 2>/dev/null || true
+        window_focus_pid=''
+    fi
+    systemctl --user stop session-switch-overlay.service || true
+    rm -f -- "$environment_file"
+}
+stop() {
+    if [[ -n "$child" ]]; then
+        kill "$child" 2>/dev/null || true
+    fi
+    exit 143
+}
+trap cleanup EXIT
+trap stop INT TERM HUP
+
+# EnvironmentFile quoting is generated from the compositor's inherited values;
+# do not reuse a stale KDE DISPLAY from the persistent systemd user manager.
+python3 - "$environment_file" "$(basename -- "$1")" <<'PY'
+import json, os, sys, tempfile
+from pathlib import Path
+path=Path(sys.argv[1])
+with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as stream:
+    pending=Path(stream.name)
+    # HID/button/motion/touchpad siblings must not expose duplicate DS5 pads.
+    stream.write('SESSION_SWITCH_INPUT_TARGET=ds5-single\n')
+    stream.write('SESSION_SWITCH_REQUIRE_INPUT_GUARD=1\n')
+    for name in ('DISPLAY','XAUTHORITY'):
+        stream.write(f'{name}={json.dumps(os.environ.get(name,""))}\n')
+os.replace(pending,path)
+PY
+if ! systemctl --user start session-switch-overlay.service; then
+    echo 'Overlay prototype failed to start; continuing with the session client.' >&2
+fi
+# Both frontends require physical exclusion and a fully initialized single pad.
+if [[ "${SESSION_SWITCH_REQUIRE_INPUT_GUARD:-0}" == 1 || "${SESSION_SWITCH_STEAM_DIAGNOSTIC:-0}" == 1 || "$heroic_diagnostic" == 1 || "$(basename -- "$1")" == heroic-gamescope ]]; then
+    isolation_args=(--single-playstation)
+    if ! python3 "$HOME/.local/bin/wait-controller-isolation.py" "${isolation_args[@]}"; then
+        echo 'Continuing with launcher only; controller isolation is unavailable.' >&2
+        cleanup
+    fi
+fi
+# Collect window evidence for Heroic without changing focus or game settings.
+if [[ "$(basename -- "$1")" == heroic-gamescope ]]; then
+    if [[ "$heroic_diagnostic" == 1 || "${SESSION_SWITCH_DIAGNOSTICS:-0}" == 1 ]]; then
+        python3 "$HOME/.local/bin/collect-controller-routes.py" --parent "$$" >/dev/null 2>&1 &
+        python3 "$HOME/.local/bin/collect-gamescope-windows.py" --parent "$$" >/dev/null 2>&1 &
+    fi
+    python3 "$HOME/.local/bin/heroic-window-focus.py" --parent "$$" &
+    window_focus_pid=$!
+fi
+"$@" &
+child=$!
+# Explicit one-time doctor requests only; never delay or gate launcher startup.
+doctor_session=steam
+if [[ "$(basename -- "$1")" == heroic-gamescope ]]; then
+    doctor_session=heroic
+fi
+if [[ -f "$HOME/.local/state/hstn/doctor-$doctor_session.once" && -r "$HOME/.local/bin/capture-doctor.py" ]]; then
+    python3 -B "$HOME/.local/bin/capture-doctor.py" --session "$doctor_session" --parent "$$" &
+fi
+wait "$child"

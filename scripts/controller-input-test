@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Visible dummy game for checking controller input isolation under the overlay."""
+import argparse
+import os
+from pathlib import Path
+import re
+import signal
+import subprocess
+import sys
+
+os.environ['QT_QPA_PLATFORM'] = 'xcb'
+from PySide6 import QtCore, QtWidgets
+import evdev
+
+
+def xprop(*args):
+    return subprocess.run(['xprop', *args], capture_output=True, text=True, check=True, timeout=2).stdout
+
+
+class Counter(QtWidgets.QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('HSTN Controller Input Test')
+        self.resize(1280,720)
+        self.count=0;self.last='None';self.devices={};self.frames=0;self.root_before=None;self.root_ours=None
+        self.title=QtWidgets.QLabel('Controller input test')
+        self.title.setStyleSheet('font-size:42px;font-weight:bold;')
+        self.label=QtWidgets.QLabel()
+        self.help=QtWidgets.QLabel('Press D-pad / Cross here: the count should rise.\n'
+            'Open the overlay with PS and note the count.\n'
+            'Navigate / select in the overlay, then close with Circle.\n'
+            'The count must stay unchanged while the overlay is open.\n'
+            'Press D-pad / Cross again: the count should resume.\n\n'
+            'Esc closes this test. No session switching is performed.')
+        layout=QtWidgets.QVBoxLayout(self)
+        for label in (self.title,self.label,self.help):
+            label.setAlignment(QtCore.Qt.AlignCenter);layout.addWidget(label)
+        self.setStyleSheet('background:#14253c;color:#fff5e2;font-size:24px;')
+        self.setFocusPolicy(QtCore.Qt.StrongFocus)
+        self.timer=QtCore.QTimer(self);self.timer.timeout.connect(self.refresh);self.timer.start(500)
+        self.refresh()
+
+    def refresh(self):
+        self.frames+=1
+        for path in evdev.list_devices():
+            if path in self.devices:continue
+            try:
+                device=evdev.InputDevice(path)
+                if evdev.ecodes.BTN_GAMEPAD not in device.capabilities().get(evdev.ecodes.EV_KEY,[]):
+                    device.close();continue
+                notifier=QtCore.QSocketNotifier(device.fd,QtCore.QSocketNotifier.Read,self)
+                notifier.activated.connect(lambda *unused, path=path:self.read_device(path))
+                self.devices[path]=(device,notifier,{})
+            except OSError:continue
+        self.render()
+
+    def read_device(self,path):
+        try:
+            device,notifier,previous=self.devices[path]
+            for event in device.read():
+                button=event.type==evdev.ecodes.EV_KEY and event.value==1
+                hat=(event.type==evdev.ecodes.EV_ABS and event.code in (16,17)
+                     and event.value!=0 and previous.get(event.code)!=event.value)
+                if event.type==evdev.ecodes.EV_ABS:previous[event.code]=event.value
+                if button or hat:
+                    self.count+=1
+                    self.last=f'{device.name}: code {event.code}, value {event.value}'
+                    print(f'Game controller count={self.count}; {self.last}',flush=True)
+            self.render()
+        except BlockingIOError:pass
+        except OSError:
+            device,notifier,_=self.devices.pop(path)
+            notifier.setEnabled(False);notifier.deleteLater();device.close()
+
+    def render(self):
+        self.label.setText(f'Game controller events: {self.count}\nLast: {self.last}\n'
+                           f'Accessible gamepads: {len(self.devices)} · heartbeat: {self.frames}')
+
+    def tag(self):
+        appid=os.environ.get('SteamAppId','600123')
+        if not appid.isdecimal() or int(appid)==0:appid='600123'
+        xprop('-id',str(int(self.winId())),'-f','STEAM_GAME','32c','-set','STEAM_GAME',appid)
+        # Steam owns game selection for Steam launches. Heroic's standalone
+        # session needs this test window selected above its pinned frontend.
+        if not os.environ.get('SteamAppId'):
+            value=xprop('-root','GAMESCOPECTRL_BASELAYER_APPID')
+            match=re.search(r'=\s*([\d, ]+)',value)
+            self.root_before=match.group(1).replace(' ','') if match else ''
+            self.root_ours=appid+(','+self.root_before if self.root_before else '')
+            xprop('-root','-f','GAMESCOPECTRL_BASELAYER_APPID','32co','-set',
+                  'GAMESCOPECTRL_BASELAYER_APPID',self.root_ours)
+
+    def cleanup(self):
+        for device,notifier,_ in self.devices.values():
+            notifier.setEnabled(False);device.close()
+        self.devices.clear()
+        if self.root_ours is not None:
+            try:
+                current=xprop('-root','GAMESCOPECTRL_BASELAYER_APPID')
+                match=re.search(r'=\s*([\d, ]+)',current)
+                if match and match.group(1).replace(' ','')==self.root_ours:
+                    if self.root_before:
+                        xprop('-root','-f','GAMESCOPECTRL_BASELAYER_APPID','32co','-set',
+                              'GAMESCOPECTRL_BASELAYER_APPID',self.root_before)
+                    else:xprop('-root','-remove','GAMESCOPECTRL_BASELAYER_APPID')
+            except Exception as error:print(f'Focus restore: {error}',file=sys.stderr)
+
+    def keyPressEvent(self,event):
+        if event.key()==QtCore.Qt.Key_Escape:self.close()
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--timeout',type=int,default=0)
+    args=parser.parse_args()
+    app=QtWidgets.QApplication(sys.argv[:1]);window=Counter();window.show()
+    app.aboutToQuit.connect(window.cleanup)
+    try:window.tag()
+    except Exception as error:print(f'Gamescope tagging: {error}',file=sys.stderr)
+    for sig in (signal.SIGINT,signal.SIGTERM):signal.signal(sig,lambda *unused:app.quit())
+    if args.timeout:QtCore.QTimer.singleShot(args.timeout*1000,app.quit)
+    return app.exec()
+
+
+if __name__=='__main__':sys.exit(main())

@@ -1,0 +1,34 @@
+# Local agent state and credentials
+/.aws/
+/.codex/
+/.agents/
+/.superpowers/
+.env
+.env.*
+!.env.example
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Generated packages and local backups
+/dist/
+/build/
+*.egg-info/
+*.bak
+*.bak-*
+*~
+*.log
+
+# Keep diagnostic instructions/code, exclude private machine captures.
+/diagnostics/**
+!/diagnostics/**/
+!/diagnostics/**/*.md
+!/diagnostics/**/*.py
+# This generic udev sample is required by tests/test_temporary_input_fix.py.
+!/diagnostics/steam-input/50-inputplumber-hide-hidraw1-early.rules.captured
