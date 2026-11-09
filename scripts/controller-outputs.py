@@ -14,6 +14,7 @@ def load(name):
 
 controllers = load('supported-controllers')
 playstation = load('playstation-output')
+profiles = load('input-profiles')
 
 
 def xbox_devices(sysfs=Path('/sys')):
@@ -63,6 +64,9 @@ class ControllerOutputs:
         sony, xbox = [], []
         for record in records:
             if not controllers.supported_sources(record['sources']):
+                continue
+            profile = controllers.composite_profile(record['sources'])
+            if profile and profiles.PROFILES[profile]['output_policy'] == 'preserve':
                 continue
             families = {controllers.xbox_source(source) for source in record['sources']}
             if len(families) == 1:

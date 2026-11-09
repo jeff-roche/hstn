@@ -1,5 +1,6 @@
 #!/usr/bin/bash
-# Preserve the packaged session and all its environment/hooks.
-. /usr/share/gamescope-session-plus/sessions.d/ogui-steam
+# Bazzite treats this user override's presence as OpenGamepadUI disabled.
+# Preserve that setting: source packaged Steam, then let HSTN own the overlay.
+. /usr/share/gamescope-session-plus/sessions.d/steam
 export SESSION_SWITCH_STEAM_CLIENTCMD="$CLIENTCMD"
 CLIENTCMD="$HOME/.local/bin/steam-session-with-overlay"

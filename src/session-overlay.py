@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -20,11 +21,21 @@ import importlib.util
 SERVICE = 'org.shadowblip.InputPlumber'
 MANAGER = '/org/shadowblip/InputPlumber/Manager'
 COMPOSITE = 'org.shadowblip.Input.CompositeDevice'
+MENU_SCALE = 0.75
 
 _spec = importlib.util.spec_from_file_location('supported_controllers',
     Path(__file__).resolve().parents[1] / 'scripts/supported-controllers.py')
 controllers = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(controllers)
+_spec = importlib.util.spec_from_file_location('input_profiles',
+    Path(__file__).resolve().parents[1] / 'scripts/input-profiles.py')
+profiles = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(profiles)
+_spec = importlib.util.spec_from_file_location('handheld_session_output',
+    Path(__file__).resolve().parents[1] / 'scripts/handheld-session-output.py')
+handheld_outputs = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(handheld_outputs)
+
 
 
 def bus(*args):
@@ -43,6 +54,14 @@ def set_property(path, interface, name, signature, value):
     bus('set-property', SERVICE, path, interface, name, signature, str(value))
 
 
+def handheld_output_lease():
+    return handheld_outputs.OutputLease(os.environ['XDG_RUNTIME_DIR'],
+        get_property=get_property,
+        set_targets=lambda path, targets: bus('call', SERVICE, path, COMPOSITE,
+            'SetTargetDevices', 'as', str(len(targets)), *targets),
+        exists=lambda path: path in composites(), supported=controllers.preserved_composite)
+
+
 def composites():
     result = subprocess.run(['busctl', '--system', '--list', 'tree', SERVICE],
                             capture_output=True, text=True, check=True, timeout=3)
@@ -55,16 +74,78 @@ def compatibility_targets(name, sources, enabled):
     return None
 
 
-def configure_menu_activation(path, restore_default=False):
+def configure_menu_activation(path, restore_default=False, profile='playstation'):
     # Use InputPlumber's per-composite chord handling. A partial Guide chord
     # is replayed to the launcher on release; a complete chord is consumed.
-    keys = ['Gamepad:Button:Guide']
-    if not restore_default:
-        keys.append('Gamepad:Button:Select')
+    keys = ['Gamepad:Button:Guide'] if restore_default else list(profiles.PROFILES[profile]['activation'])
     target = 'Gamepad:Button:Guide' if restore_default else 'Gamepad:Button:QuickAccess'
     bus('call', SERVICE, path, COMPOSITE, 'SetInterceptActivation', 'ass',
         str(len(keys)), *keys, target)
 
+
+
+class DesktopMapLease:
+    """The root guard restores its fixed mapping when this connection closes."""
+    def __init__(self, path):
+        self.native_input_after = 0
+        self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.socket.settimeout(15)
+        try:
+            self.socket.connect('/run/session-switch-input-guard/desktop-map.sock')
+            # Verify the root-owned server before asking it to change routing.
+            import struct
+            _, uid, _ = struct.unpack('3i', self.socket.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+            if uid != 0:
+                raise RuntimeError('Desktop mapping service is not root-owned')
+            self.request({'open': path})
+        except Exception:
+            self.socket.close()
+            raise
+
+    def request(self, message):
+        try:
+            self.socket.sendall(json.dumps(message).encode() + b'\n')
+            data = b''
+            while b'\n' not in data:
+                part = self.socket.recv(4096)
+                if not part or len(data) + len(part) > 4096:
+                    raise RuntimeError('Desktop mapping service disconnected')
+                data += part
+            response = json.loads(data.split(b'\n', 1)[0])
+            if not isinstance(response, dict):
+                raise RuntimeError('Invalid Desktop mapping response')
+            if message == {'check': True}:
+                expected = (set(response) == {'ok', 'repaired'} and response.get('ok') is True
+                            and type(response.get('repaired')) is bool)
+            else:
+                expected = response == {'ok': True}
+            if not expected:
+                raise RuntimeError(response.get('error', 'Desktop mapping failed'))
+            return response
+        except (OSError, ValueError) as error:
+            raise RuntimeError('Desktop mapping unavailable: ' + str(error)) from error
+
+    def alive(self):
+        import select
+        try:
+            return not select.select([self.socket], [], [], 0)[0] or bool(self.socket.recv(1, socket.MSG_PEEK))
+        except OSError:
+            return False
+
+    def check(self, native=False):
+        response = self.request({'check': True})
+        if response['repaired']:
+            # Steam may already have queued a keyboard/mouse action from the
+            # briefly unleased gamepad. Do not interpret it as a session choice.
+            self.native_input_after = time.monotonic() + .5
+        if native and time.monotonic() < self.native_input_after:
+            raise RuntimeError('Controller settings changed. Reopen HSTN and try again.')
+
+    def close(self):
+        try:
+            self.request({'close': True})
+        finally:
+            self.socket.close()
 
 def desktop_isolation_issues():
     """Desktop Steam can already hold physical FDs before management starts."""
@@ -74,7 +155,7 @@ def desktop_isolation_issues():
         if os.environ.get('SESSION_SWITCH_INPUT_TARGET') == 'ds5-single':
             arguments.append('--single-playstation')
         result = subprocess.run(arguments,
-                                capture_output=True, text=True, timeout=3)
+                                capture_output=True, text=True, timeout=10)
         report = json.loads(result.stdout)
         issues = report['isolation_issues']
         if result.returncode and not issues:
@@ -95,6 +176,11 @@ def restore(state):
                     bus('call', SERVICE, path, COMPOSITE, 'Stop')
         except Exception as error:
             print(f'Manager restore: {error}', file=sys.stderr)
+    if state.get('handheld_output'):
+        try:
+            handheld_output_lease().recover(owned=True)
+        except Exception as error:
+            print(f'Handheld output recovery retained: {error}', file=sys.stderr)
     for path, mode in state.get('modes', {}).items():
         if state.get('manage_changed') and path not in state.get('baseline', []):
             continue
@@ -116,9 +202,30 @@ if '--restore-watchdog' in sys.argv:
         restore(state)
     sys.exit(0)
 
-os.environ['QT_QPA_PLATFORM'] = 'xcb'
+def qt_platform(environment, arguments):
+    desktop = environment.get('SESSION_SWITCH_DESKTOP_MODE') == '1' or '--desktop' in arguments
+    if desktop and environment.get('WAYLAND_DISPLAY'):
+        return environment.get('QT_QPA_PLATFORM', 'wayland')
+    # Gamescope needs X11 overlay and input-focus properties.
+    return 'xcb'
+
+
+os.environ['QT_QPA_PLATFORM'] = qt_platform(os.environ, sys.argv[1:])
 from PySide6 import QtCore, QtDBus, QtGui, QtWidgets
 
+
+
+
+def menu_minimum(value):
+    return max(1, round(value * MENU_SCALE))
+
+def scaled_art(pixmap, size, ratio):
+    """Rasterize at physical resolution while retaining logical layout size."""
+    physical = QtCore.QSize(max(1, round(size.width() * ratio)),
+                           max(1, round(size.height() * ratio)))
+    result = pixmap.scaled(physical, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+    result.setDevicePixelRatio(ratio)
+    return result
 
 def xproperty(window, name, value):
     subprocess.run(['xprop', '-id', str(window), '-f', name, '32c', '-set', name, str(value)],
@@ -219,6 +326,9 @@ class InputRouter(QtCore.QObject):
         self.target_families = {}
         self.path_sources = {}
         self.controller_pressed = {}
+        self.controller_released = {}
+        self.desktop_maps = {}
+        self.handheld_output = None
         self.dbus = QtDBus.QDBusConnection.systemBus()
         self.visible = False
         self.manage = manage
@@ -269,12 +379,16 @@ class InputRouter(QtCore.QObject):
         # Do not compete with OpenGamepadUI for ownership of intercepted events.
         if subprocess.run(['pgrep', '-x', 'opengamepadui'], stdout=subprocess.DEVNULL).returncode == 0:
             raise RuntimeError('OpenGamepadUI is running; HSTN will not take over its controller input.')
+        if controllers.legion_go_s_host():
+            self.handheld_output = handheld_output_lease()
+            self.handheld_output.recover()
         self.watchdog = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--restore-watchdog'],
                                          stdin=subprocess.PIPE, text=True,
                                          pass_fds=(self.lease.fileno(),) if self.lease else ())
         self.state['baseline'] = composites()
         self.save()
-        if self.desktop and self.state['baseline']:
+        if self.desktop and any(not controllers.preserved_composite(
+                get_property(path, COMPOSITE, 'SourceDevicePaths')) for path in self.state['baseline']):
             raise RuntimeError('Existing InputPlumber controller ownership was preserved. Stop its owner before restarting Desktop HSTN.')
         old = get_property(MANAGER, 'org.shadowblip.InputManager', 'ManageAllDevices')
         if self.manage and not old:
@@ -283,9 +397,16 @@ class InputRouter(QtCore.QObject):
             set_property(MANAGER, 'org.shadowblip.InputManager', 'ManageAllDevices', 'b', 'true')
 
     def release_controller(self):
+        for path, lease in list(self.desktop_maps.items()):
+            try:
+                lease.close()
+            except RuntimeError as error:
+                print(f'Desktop mapping restore: {error}', file=sys.stderr, flush=True)
+            del self.desktop_maps[path]
         for target in list(self.targets):
             self.detach_target(target)
         self.controller_pressed.clear()
+        self.controller_released.clear()
         self.path_sources.clear()
         self.pressed.clear()
         if self.watchdog:
@@ -293,6 +414,7 @@ class InputRouter(QtCore.QObject):
             self.watchdog.wait(timeout=10)
             self.watchdog = None
         self.state = {'modes': {}, 'manage_changed': False, 'baseline': [], 'activation_paths': []}
+        self.handheld_output = None
         if self.playstation:
             self.playstation = type(self.playstation)(self.set_targets)
             self.playstation_phase = None
@@ -305,6 +427,7 @@ class InputRouter(QtCore.QObject):
         self.target_paths.pop(target, None)
         self.target_families.pop(target, None)
         self.controller_pressed.pop(target, None)
+        self.controller_released.pop(target, None)
         if receiver is not self:
             receiver.deleteLater()
 
@@ -322,9 +445,18 @@ class InputRouter(QtCore.QObject):
         return current_sources
 
     def refresh(self):
+        if any(not lease.alive() for lease in self.desktop_maps.values()):
+            self.fatal.emit('Desktop input mapping disconnected; controller input was released.')
+            return
         if not self.guard_available():
             self.guard_lost()
             return
+        if self.visible:
+            try:
+                self.verify_capture()
+            except RuntimeError as error:
+                self.fatal.emit(str(error))
+                return
         try:
             if not controllers.connected():
                 if self.watchdog:
@@ -351,6 +483,10 @@ class InputRouter(QtCore.QObject):
             if vanished:
                 for path in vanished:
                     self.state['modes'].pop(path, None)
+                    lease = self.desktop_maps.pop(path, None)
+                    if lease:
+                        try:lease.close()
+                        except RuntimeError as error:print(f'Desktop mapping restore: {error}', file=sys.stderr)
                 self.state['activation_paths'] = [path for path in self.state['activation_paths'] if path not in vanished]
                 self.save()
             self.path_sources = current_sources
@@ -378,19 +514,31 @@ class InputRouter(QtCore.QObject):
                     for error in self.playstation.failures.values():
                         print(f'Controller initialization: {error}', file=sys.stderr, flush=True)
             for path in paths:
-                if self.playstation and self.state['manage_changed'] and path not in self.playstation.ready_paths:
+                if (self.playstation and self.state['manage_changed'] and path not in self.playstation.ready_paths
+                        and not controllers.preserved_composite(current_sources[path])):
                     continue
-                if not controllers.supported_sources(current_sources[path]):
+                if not controllers.supported_sources(current_sources[path]) or not controllers.composite_profile(current_sources[path]):
                     continue
                 if path in self.state['modes']:
                     continue
-                if path in self.state['baseline']:
+                if path in self.state['baseline'] and not controllers.preserved_composite(current_sources[path]):
                     # No getter for prior activation chord: preserve existing owners.
                     continue
                 original = get_property(path, COMPOSITE, 'InterceptMode')
                 if original != 0:
                     print(f'Controller already intercepted; leaving untouched: {path}', flush=True)
                     continue
+                if (controllers.composite_profile(current_sources[path]) == 'legion-go-s'
+                        and os.environ.get('SESSION_SWITCH_CURRENT_SESSION') == 'heroic'):
+                    if self.handheld_output is None:
+                        raise RuntimeError('Handheld output recovery context is unavailable')
+                    self.state['handheld_output'] = True
+                    self.save()  # Watchdog owns recovery before target changes begin.
+                    try:
+                        self.handheld_output.acquire(path, current_sources[path])
+                    except Exception as error:
+                        self.fatal.emit('Heroic handheld controller setup failed: ' + str(error))
+                        raise
                 if self.playstation and path in self.playstation.companions:
                     # Keep physical siblings hidden, but never present phantom
                     # gamepads or duplicate their events into our menu.
@@ -423,12 +571,12 @@ class InputRouter(QtCore.QObject):
                         self.targets.add(target)
                         self.bindings[target] = receiver
                         self.target_paths[target] = path
-                        self.target_families[target] = ('xbox' if any(
-                            controllers.xbox_source(source) for source in current_sources[path]) else 'playstation')
+                        self.target_families[target] = profiles.PROFILES[
+                            controllers.composite_profile(current_sources[path])]['glyphs']
                 self.state['modes'][path] = original
                 self.state['activation_paths'].append(path)
                 self.save()
-                configure_menu_activation(path)
+                configure_menu_activation(path, profile=controllers.composite_profile(current_sources[path]))
                 set_property(path, COMPOSITE, 'InterceptMode', 'u', 2 if self.visible else 1)
                 print(f'Controller ready: {path}', flush=True)
         except Exception as error:
@@ -444,15 +592,34 @@ class InputRouter(QtCore.QObject):
             raise RuntimeError('Input guard unavailable')
         if visible and self.desktop:
             if not self.state['modes']:
-                raise RuntimeError('No controller is ready. Connect a supported controller and wait for Guide+Select to become available.')
+                raise RuntimeError('No controller is ready. Connect a supported controller and wait for its HSTN activation chord to become available.')
             issues = desktop_isolation_issues()
             if issues:
                 raise RuntimeError('; '.join(issues))
+        if visible and not self.visible:
+            self.controller_released.clear()
         self.visible = visible
         failures = []
         for path in self.state['modes']:
             try:
-                set_property(path, COMPOSITE, 'InterceptMode', 'u', 2 if visible else 1)
+                profile = controllers.composite_profile(self.path_sources.get(path, ()))
+                split = self.desktop and profiles.PROFILES.get(profile, {}).get('desktop_split', False)
+                if split and visible:
+                    set_property(path, COMPOSITE, 'InterceptMode', 'u', 2)
+                    if path not in self.desktop_maps:
+                        try:
+                            self.desktop_maps[path] = DesktopMapLease(path)
+                        except OSError as error:
+                            raise RuntimeError('Update the HSTN system guard for Desktop split input: ' + str(error)) from error
+                    set_property(path, COMPOSITE, 'InterceptMode', 'u', 1)
+                elif path in self.desktop_maps:
+                    set_property(path, COMPOSITE, 'InterceptMode', 'u', 2)
+                    try:
+                        self.desktop_maps.pop(path).close()
+                    finally:
+                        set_property(path, COMPOSITE, 'InterceptMode', 'u', 1)
+                else:
+                    set_property(path, COMPOSITE, 'InterceptMode', 'u', 2 if visible else 1)
             except RuntimeError as error:
                 if visible:
                     raise
@@ -460,23 +627,44 @@ class InputRouter(QtCore.QObject):
         if failures:
             print('Input release: ' + '; '.join(failures), file=sys.stderr, flush=True)
 
+    def verify_capture(self, native=False):
+        for lease in self.desktop_maps.values():
+            lease.check(native=native)
+
     @QtCore.Slot(str, float)
     def on_event(self, event, value):
         self.controller_event('default', event, value)
 
     def controller_event(self, controller, event, value):
         pressed = self.controller_pressed.setdefault(controller, set())
+        released = self.controller_released.setdefault(controller, set())
+        family = self.target_families.get(controller, 'playstation')
+        action = profiles.action(event, family)
+        on_release = action in profiles.release_actions(family)
         if value <= .5:
             pressed.discard(event)
-            return
-        if event in pressed:
-            return
-        pressed.add(event)
-        if event in ('ui_quick', 'ui_up', 'ui_down', 'ui_left', 'ui_right',
-                     'ui_accept', 'ui_back', 'ui_l1', 'ui_r1'):
-            self.input_family.emit(self.target_families.get(controller, 'playstation'))
+            if not on_release or not self.visible or event in released:
+                return
+            # Also accept an unmatched release: older InputPlumber may have
+            # suppressed the first press because its DBus target was still held.
+            released.add(event)
+        else:
+            if event in pressed:
+                return
+            # Direct DBus axis mappings can change sign without emitting a
+            # centered sample for the opposite direction.
+            opposite = {'ui_left': 'ui_right', 'ui_right': 'ui_left',
+                        'ui_up': 'ui_down', 'ui_down': 'ui_up'}.get(event)
+            if opposite:
+                pressed.discard(opposite)
+            pressed.add(event)
+            released.discard(event)
+            if on_release:
+                return
+        if action:
+            self.input_family.emit(family)
         print(f'Controller event: {event}', flush=True)
-        self.action.emit(event)
+        self.action.emit(action or event)
 
     def close(self):
         if hasattr(self, 'timer'):
@@ -536,24 +724,26 @@ class DestinationButton(QtWidgets.QPushButton):
         self.initStyleOption(option)
         option.text = ''
         self.style().drawControl(QtWidgets.QStyle.CE_PushButton, option, painter, self)
-        margin = max(10, int(self.width() * .05))
+        margin = max(menu_minimum(10), int(self.width() * .05))
         font = self.font()
         ratio = .075 if self.text().startswith('Switch to ') else .10
-        font.setPixelSize(max(15, min(36, int(self.width() * ratio))))
+        font.setPixelSize(max(menu_minimum(15), min(36, int(self.width() * ratio))))
         font.setBold(True)
         name_height = QtGui.QFontMetrics(font).height()
         badge_font = QtGui.QFont(font)
-        badge_font.setPixelSize(max(12, int(font.pixelSize() * .65)))
+        badge_font.setPixelSize(max(menu_minimum(12), int(font.pixelSize() * .65)))
         badge_height = QtGui.QFontMetrics(badge_font).height()
         # Reserve the same badge slot on all cards so destination names align.
-        bottom_padding = max(12, margin)
-        badge_gap = max(3, int(self.width() * .015))
+        bottom_padding = max(menu_minimum(12), margin)
+        badge_gap = max(menu_minimum(3), int(self.width() * .015))
         label_top = self.height() - bottom_padding - badge_height - badge_gap - name_height
-        image_label_gap = max(12, int(self.width() * .045))
+        image_label_gap = max(menu_minimum(12), int(self.width() * .045))
         area = QtCore.QRect(margin, margin, self.width()-2*margin,
                            max(1, label_top-image_label_gap-margin))
-        art = self.art.scaled(area.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        painter.drawPixmap(area.center() - art.rect().center(), art)
+        art = scaled_art(self.art, area.size(), self.devicePixelRatioF())
+        logical = art.deviceIndependentSize()
+        origin = QtCore.QRectF(area).center() - QtCore.QPointF(logical.width()/2, logical.height()/2)
+        painter.drawPixmap(origin, art)
         painter.setPen(QtGui.QColor('#FFF5E2'))
         painter.setFont(font)
         label = QtCore.QRect(margin, label_top, self.width()-2*margin, name_height)
@@ -611,8 +801,8 @@ class ControllerToast(QtWidgets.QFrame):
         layout.setSpacing(12)
         self.rocket = QtWidgets.QLabel()
         self.rocket.setFixedSize(34, 34)
-        self.rocket.setPixmap(QtGui.QPixmap(str(ASSETS / 'logo/hstn-rocket-48.png')).scaled(
-            34, 34, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self.rocket.setPixmap(scaled_art(QtGui.QPixmap(str(ASSETS / 'logo/hstn-rocket-256.png')),
+                                         self.rocket.size(), self.devicePixelRatioF()))
         self.rocket.setAccessibleName('HSTN')
         layout.addWidget(self.rocket)
         self.message = QtWidgets.QLabel()
@@ -649,7 +839,7 @@ class ControllerToast(QtWidgets.QFrame):
         name, transport, connected = self.pending.pop(0)
         text = name + (' connected' if connected else ' disconnected')
         self.message.setText(name + ('\nConnected' if connected else '\nDisconnected'))
-        self.transport.setPixmap(QtGui.QIcon(str(ASSETS / 'controller' / (transport + '.svg'))).pixmap(24, 24))
+        self.transport.setPixmap(QtGui.QIcon(str(ASSETS / 'controller' / (transport + '.svg'))).pixmap(QtCore.QSize(24, 24), self.devicePixelRatioF()))
         self.transport.setAccessibleName('Bluetooth' if transport == 'bluetooth' else 'USB')
         self.setAccessibleName(text + ', ' + self.transport.accessibleName())
         screen = QtWidgets.QApplication.primaryScreen()
@@ -720,28 +910,21 @@ class ControllerFooter(QtWidgets.QWidget):
         self.scroll.setVisible(review)
         for row in self.rows:
             row.setSpacing(max(3, size//6))
-        names = {
-            'playstation': ('l1', 'r1', 'cross', 'circle'),
-            'xbox': ('xbox-lb', 'xbox-rb', 'xbox-a', 'xbox-b'),
-            'keyboard': ('keyboard-page-up', 'keyboard-page-down', 'keyboard-enter', 'keyboard-escape'),
-        }[family]
+        names, (scroll, accept, back) = profiles.PROMPTS[family]
         for (name, label), asset in zip(self.glyphs.items(), names):
             label.setFixedSize(size, size)
-            label.setPixmap(QtGui.QIcon(str(ASSETS / f'controller/{asset}.svg')).pixmap(size, size))
-        scroll, accept, back = {
-            'playstation': ('L1 or R1', 'Cross', 'Circle'),
-            'xbox': ('LB or RB', 'A', 'B'),
-            'keyboard': ('Page Up or Page Down', 'Enter', 'Escape'),
-        }[family]
+            label.setPixmap(QtGui.QIcon(str(ASSETS / f'controller/{asset}.svg')).pixmap(QtCore.QSize(size, size), self.devicePixelRatioF()))
         self.setAccessibleName((scroll + ': scroll apps. ' if review else '') +
                                accept + ': select. ' + back + ': back.')
 
 
 
 class Overlay(QtWidgets.QWidget):
-    def __init__(self, router=None, underlay=None, enable_actions=True, desktop=False):
+    def __init__(self, router=None, underlay=None, enable_actions=True, desktop=False, render_scale=1.0):
         super().__init__()
         self.router, self.underlay = router, underlay
+        self.controller_error = None
+        self.render_scale = render_scale
         self.input_family = 'keyboard'
         self.enable_actions = enable_actions
         self.desktop = desktop
@@ -800,7 +983,7 @@ class Overlay(QtWidgets.QWidget):
             button.setFocusPolicy(QtCore.Qt.NoFocus)
             button.setMouseTracking(True)
             button.installEventFilter(self)
-            button.clicked.connect(lambda checked=False, index=index: self.choose(index))
+            button.clicked.connect(lambda checked=False, index=index: self.choose(index) if self.isVisible() else None)
             button.current = button.target == self.current_session
             button.setAccessibleName(name + (' — Current' if button.current else ''))
             self.buttons.append(button)
@@ -846,10 +1029,16 @@ class Overlay(QtWidgets.QWidget):
             router.input_family.connect(self.set_input_family)
             router.action.connect(self.controller)
 
+    def set_render_scale(self, scale):
+        if scale != self.render_scale:
+            self.render_scale = scale
+            self.update_metrics()
+            print(f'Overlay Steam display scale: {scale:g}', flush=True)
+
     def update_metrics(self):
         # Bound the panel in logical pixels rather than growing with a desktop monitor.
-        panel_width = min(960, int(self.width() * .88))
-        panel_height = min(620, int(self.height() * .86))
+        panel_width = max(1, round(min(960 * self.render_scale, int(self.width() * .88)) * MENU_SCALE))
+        panel_height = max(1, round(min(620 * self.render_scale, int(self.height() * .86)) * MENU_SCALE))
         scale = min(panel_width / 1126, panel_height / 688)
         unit = lambda value: max(1, int(value * scale))
         self.panel.setFixedSize(panel_width, panel_height)
@@ -859,8 +1048,8 @@ class Overlay(QtWidgets.QWidget):
         self.body.setSpacing(unit(28))
         self.actions.setSpacing(unit(18))
         self.logo.setFixedSize(unit(48), unit(60))
-        self.logo.setPixmap(self.logo_art.scaled(self.logo.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
-        self.update_footer(max(26, unit(40)))
+        self.logo.setPixmap(scaled_art(self.logo_art, self.logo.size(), self.devicePixelRatioF()))
+        self.update_footer(max(menu_minimum(26), unit(40)))
         self.status_scroll.setMinimumWidth(0)
         self.status_scroll.setMinimumHeight(unit(48) if self.mode not in ('confirm', 'closing') else 0)
         self.status_scroll.setMaximumHeight(unit(68) if self.mode not in ('confirm', 'closing') else 16777215)
@@ -869,14 +1058,14 @@ class Overlay(QtWidgets.QWidget):
                 button.setFixedHeight(unit(68))
         self.setStyleSheet(f"""
             #panel {{background:#06152E; border-radius:{unit(16)}px;}}
-            QLabel {{color:#FFF5E2; font-size:{max(14, unit(23))}px; background:transparent;}}
+            QLabel {{color:#FFF5E2; font-size:{max(menu_minimum(14), unit(23))}px; background:transparent;}}
             #wordmark {{font-size:{unit(36)}px; font-weight:bold;}}
-            #title {{font-size:{max(24, unit(54))}px; font-weight:bold;}}
+            #title {{font-size:{max(menu_minimum(24), unit(54))}px; font-weight:bold;}}
             #divider {{background:#526071; border:none;}}
             QPushButton {{background:#07182F; color:#FFF5E2;
-                border-radius:{unit(16)}px; font-size:{max(16, unit(28))}px; font-weight:bold;}}
+                border-radius:{unit(16)}px; font-size:{max(menu_minimum(16), unit(28))}px; font-weight:bold;}}
             QPushButton[destructive="true"] {{color:#FFD15A;}}
-            QPushButton[selected="true"] {{border:{max(3, unit(5))}px solid #FFF5E2;}}
+            QPushButton[selected="true"] {{border:{max(menu_minimum(3), unit(5))}px solid #FFF5E2;}}
             QPushButton:disabled {{color:#9DA7B5; border-color:#233951;}}
             QScrollArea, QScrollArea QWidget {{background:transparent; border:none;}}
             QScrollBar:vertical {{background:#102440; width:{unit(12)}px;}}
@@ -884,14 +1073,14 @@ class Overlay(QtWidgets.QWidget):
         """)
 
     def set_input_family(self, family):
-        if family in ('keyboard', 'xbox', 'playstation') and family != self.input_family:
+        if family in profiles.PROMPTS and family != self.input_family:
             self.input_family = family
             self.update_footer()
 
     def update_footer(self, size=None):
         if size is None:
             scale = min(self.panel.width() / 1126, self.panel.height() / 688)
-            size = max(26, int(40 * scale))
+            size = max(menu_minimum(26), int(40 * scale))
         self.footer.configure(self.mode in ('confirm', 'closing'), size, self.input_family)
 
     def resizeEvent(self, event):
@@ -916,7 +1105,10 @@ class Overlay(QtWidgets.QWidget):
                 if not self.desktop:
                     raise
                 self.disable_controller(str(error))
-        self.show()
+        if self.desktop and QtGui.QGuiApplication.platformName() == 'wayland':
+            self.showFullScreen()
+        else:
+            self.show()
         try:
             if self.desktop:
                 self.raise_();self.activateWindow();self.setFocus();self.highlight()
@@ -950,6 +1142,8 @@ class Overlay(QtWidgets.QWidget):
         print('Overlay closed; input released', flush=True)
 
     def disable_controller(self, message):
+        self.controller_error = message
+        print('Controller unavailable: ' + message, file=sys.stderr, flush=True)
         # A queued guard failure can arrive after Open already recovered. Do not
         # hide the keyboard/mouse fallback a second time.
         router, self.router = self.router, None
@@ -961,6 +1155,10 @@ class Overlay(QtWidgets.QWidget):
                 router.action.disconnect(self.controller)
                 router.close()
         self.status.setText('Controller unavailable: ' + message + '\nUse mouse or keyboard to access HSTN.')
+        if self.desktop and self.mode == 'menu':
+            self.buttons[2].setText('Return to Desktop')
+            self.selection = 2
+            self.highlight()
 
     def active_indices(self):
         return [index for index, button in enumerate(self.buttons) if not button.isHidden() and button.isEnabled()]
@@ -1008,7 +1206,15 @@ class Overlay(QtWidgets.QWidget):
         self.reset_menu()
         self.status.setText('Cancelled. Your apps are still running.')
 
-    def choose(self, index):
+    def choose(self, index, from_controller=False):
+        if self.desktop and self.router and self.enable_actions and self.isVisible():
+            try:
+                self.router.verify_capture(native=not from_controller)
+            except RuntimeError as error:
+                self.hide_overlay()
+                self.status.setText(str(error))
+                print('Desktop selection refused: ' + str(error), file=sys.stderr, flush=True)
+                return
         if index == 3 and self.mode == 'menu':
             self.hide_overlay()
             return
@@ -1135,6 +1341,10 @@ class Overlay(QtWidgets.QWidget):
             button.style().unpolish(button);button.style().polish(button)
 
     def eventFilter(self, watched, event):
+        if event.type() == QtCore.QEvent.Enter and self.desktop and self.controller_error:
+            # Showing the fallback beneath a stationary pointer must not move
+            # its safe default. Actual pointer movement still selects a tile.
+            return super().eventFilter(watched, event)
         if event.type() in (QtCore.QEvent.Enter, QtCore.QEvent.MouseMove):
             if watched in self.buttons and watched.isEnabled() and not watched.isHidden():
                 index = self.buttons.index(watched)
@@ -1156,12 +1366,14 @@ class Overlay(QtWidgets.QWidget):
         elif self.isVisible():
             if event in ('ui_down','ui_right'):self.navigate(1)
             elif event in ('ui_up','ui_left'):self.navigate(-1)
-            elif event == 'ui_accept':self.choose(self.selection)
+            elif event == 'ui_accept':self.choose(self.selection, from_controller=True)
             elif event == 'ui_back':self.cancel_or_hide()
             elif event == 'ui_l1':self.scroll_details(-1)
             elif event == 'ui_r1':self.scroll_details(1)
 
     def event(self, event):
+        if event.type() == QtCore.QEvent.DevicePixelRatioChange and hasattr(self, 'footer'):
+            self.update_metrics()
         if event.type() == QtCore.QEvent.KeyPress and event.key() in (QtCore.Qt.Key_Tab, QtCore.Qt.Key_Backtab):
             self.set_input_family('keyboard')
             self.navigate(-1 if event.key() == QtCore.Qt.Key_Backtab or event.modifiers() & QtCore.Qt.ShiftModifier else 1)
@@ -1184,6 +1396,30 @@ class Overlay(QtWidgets.QWidget):
 
     def closeEvent(self, event):
         self.hide_overlay();event.ignore()
+
+
+def create_application(desktop):
+    # systemd owns this background process. KDE's fallback restore must identify
+    # it as the existing autostart service, rather than relaunching Open HSTN.
+    QtCore.QCoreApplication.setAttribute(QtCore.Qt.AA_DisableSessionManager)
+    app = QtWidgets.QApplication(sys.argv[:1])
+    app.setQuitOnLastWindowClosed(False)
+    app.setApplicationName('hstn-overlay')
+    app.setApplicationDisplayName('HSTN')
+    app.setDesktopFileName('hstn-desktop-overlay' if desktop else 'hstn-open')
+    app.setWindowIcon(application_icon())
+    return app
+
+
+def notify_ready():
+    address = os.environ.get('NOTIFY_SOCKET')
+    if not address:
+        return
+    if address.startswith('@'):
+        address = '\0' + address[1:]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as channel:
+        channel.connect(address)
+        channel.sendall(b'READY=1')
 
 
 def main():
@@ -1221,11 +1457,11 @@ def main():
         os.environ['SESSION_SWITCH_REQUIRE_INPUT_GUARD'] = '1'
     else:
         os.environ.pop('SESSION_SWITCH_DESKTOP_MODE', None)
-    app=QtWidgets.QApplication(sys.argv[:1]);app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName('hstn-overlay')
-    app.setApplicationDisplayName('HSTN')
-    app.setDesktopFileName('hstn-open')
-    app.setWindowIcon(application_icon())
+    app = create_application(args.desktop)
+    screen = app.primaryScreen()
+    geometry = screen.geometry()
+    print(f'Overlay rendering: platform={app.platformName()}, screen={geometry.width()}x{geometry.height()}, '
+          f'devicePixelRatio={screen.devicePixelRatio():g}', flush=True)
     router=InputRouter(args.manage_input, lease) if args.controller or args.manage_input else None
     controller_error = None
     if router:
@@ -1238,7 +1474,21 @@ def main():
             controller_error = str(error)
             router = None
     underlay=DemoGame() if args.demo else None
-    overlay=Overlay(router,underlay,enable_actions=not args.demo,desktop=args.desktop)
+    steam_scale = None
+    if not args.desktop:
+        spec = importlib.util.spec_from_file_location('steam_ui_scale',
+            Path(__file__).resolve().parents[1] / 'scripts/steam-ui-scale.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        steam_scale = module.SteamUIScale()
+    render_scale = steam_scale.poll() if steam_scale else 1.0
+    overlay=Overlay(router,underlay,enable_actions=not args.demo,desktop=args.desktop,render_scale=render_scale)
+    if steam_scale:
+        print(f'Overlay Steam display scale: {render_scale:g}', flush=True)
+        overlay.scale_timer = QtCore.QTimer(overlay)
+        overlay.scale_timer.setInterval(2000)
+        overlay.scale_timer.timeout.connect(lambda: overlay.set_render_scale(steam_scale.poll()))
+        overlay.scale_timer.start()
     connections = toast = None
     if router or args.desktop:
         toast = ControllerToast(desktop=args.desktop)
@@ -1310,6 +1560,10 @@ def main():
             app.exit(1 if failures else 0)
         for delay,callback in ((1500,before),(2200,opened),(3000,during),(3800,closed),(5000,reopened),(5600,returned),(6500,after),(7500,finish)):
             QtCore.QTimer.singleShot(delay,callback)
+    if args.desktop:
+        # The endpoint and KWin bridge are registered before systemd accepts
+        # activation. Losing the endpoint must not kill the restore watchdog.
+        notify_ready()
     return app.exec()
 
 

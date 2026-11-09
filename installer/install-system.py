@@ -259,6 +259,8 @@ def require_guard_recovery_complete(root):
     rule=Path(root)/'run/udev/rules.d/72-hstn-controller-sources.rules'
     if reservation.exists() or reservation.is_symlink() or rule.exists() or rule.is_symlink():
         raise RuntimeError('Input source reservation recovery remains after stop; restart and stop the guard successfully before removal')
+    if (runtime/'desktop-profiles.json').exists():
+        raise RuntimeError('Desktop controller profile recovery remains; restart and stop the guard before removal')
     journal=runtime/'backups.json'
     if journal.exists() and json.loads(journal.read_text()):
         raise RuntimeError('Input guard recovery journal remains after stop; inspect/recover it before removal')

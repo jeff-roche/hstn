@@ -76,6 +76,20 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(self.m.remove_user(self.locations), [])
         self.assertEqual(icon.read_text(), 'original icon')
 
+    def test_pending_handheld_output_recovery_preserves_installed_runtime(self):
+        plan = self.m.user_files(self.source, self.locations)
+        self.m.apply_user(self.source, self.locations, plan)
+        runtime = self.locations.session_runtime
+        runtime.mkdir()
+        journal = runtime/'hstn-handheld-output.json'
+        journal.write_text('{}')
+        before = self.locations.state.read_bytes()
+        with self.assertRaisesRegex(RuntimeError, 'output recovery remains'):
+            self.m.remove_user(self.locations)
+        self.assertEqual(self.locations.state.read_bytes(), before)
+        self.assertTrue((self.locations.runtime/'scripts/handheld-session-output.py').exists())
+        self.assertTrue(journal.exists())
+
     def test_native_package_owns_runtime_and_standalone_refuses(self):
         with patch.object(self.m, 'native_installation', return_value=Path('/usr/lib/hstn')):
             with self.assertRaisesRegex(RuntimeError, 'package manager'):

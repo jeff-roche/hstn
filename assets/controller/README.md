@@ -42,3 +42,17 @@ Additional assets use the same pinned Kenney pack, ivory fill, and 64 × 64 view
 `usb.svg` and `bluetooth.svg` are HSTN-authored vectors of the conventional
 transport symbols, drawn in the same ivory color for controller notifications.
 These two files are released under CC0, like the prompt assets above.
+
+## Reusable handheld prompts
+
+`handheld-a.svg`, `handheld-b.svg`, `handheld-l1.svg`, and `handheld-r1.svg`
+come from `Steam Deck/Vector/steamdeck_button_{a,b,l1,r1}.svg` in the same
+pinned Kenney 1.3 mirror and use the existing CC0 license. They retain the
+original paths and 64 × 64 geometry, with HSTN ivory (#FFF5E2) fills and 256 px
+intrinsic dimensions. The `handheld` presentation family is reusable by later
+handheld device profiles; it does not imply Steam Deck hardware support.
+
+Internal input profiles live in `scripts/input-profiles.py`: HSTN actions,
+activation chord, glyph family, and output policy are independent fields.
+Add physical detection separately in the runtime registry and standalone root
+guard, with parity tests. New hardware must opt into a routing policy explicitly.

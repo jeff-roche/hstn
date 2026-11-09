@@ -67,6 +67,9 @@ def install_files(root, home, data, config, desktop, runtime_root=None):
         'Exec=' + ' '.join(exec_arg(arg) for arg in ['/usr/bin/python3', '-B', helper, 'autostart']),
         'OnlyShowIn=KDE;', 'Terminal=false', 'X-KDE-autostart-phase=2', ''])
     files[Path(config)/'autostart/hstn-desktop-overlay.desktop'] = (autostart, 0o644)
+    # Register the background identity for Wayland/portals without exposing a
+    # second launcher or letting KDE restore it as an interactive application.
+    files[Path(data)/'applications/hstn-desktop-overlay.desktop'] = (autostart + 'NoDisplay=true\n', 0o644)
     template = (root/'templates/systemd/hstn-desktop-overlay.service').read_text()
     command = unit_arg(runtime/'src/session-overlay.py')
     template = template.replace('"@ROOT@/src/session-overlay.py"', command)
@@ -225,7 +228,7 @@ def start_desktop():
 
 
 def ipc(method):
-    return run(['qdbus-qt6',BUS,'/Overlay',BUS+'.'+method], timeout=5).stdout.strip()
+    return run(['qdbus-qt6',BUS,'/Overlay',BUS+'.'+method], timeout=15).stdout.strip()
 
 
 def open_menu():

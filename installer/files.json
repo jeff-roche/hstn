@@ -34,5 +34,12 @@
   "templates/config/gamescope-session-plus/sessions.d/ogui-steam",
   "templates/config/gamescope-session-plus/sessions.d/heroic",
   "templates/systemd/session-switch-overlay.service", "templates/systemd/hstn-desktop-overlay.service",
-  "templates/systemd/session-switch-input-guard.service"
+  "templates/systemd/session-switch-input-guard.service",
+  "scripts/input-profiles.py",
+  "assets/controller/handheld-a.svg",
+  "assets/controller/handheld-b.svg",
+  "assets/controller/handheld-l1.svg",
+  "assets/controller/handheld-r1.svg",
+  "scripts/steam-ui-scale.py",
+  "scripts/handheld-session-output.py"
 ]

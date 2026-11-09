@@ -173,8 +173,11 @@ def isolation_issues(report, single_playstation=False):
         sources = composite.get('SourceDevicePaths', [])
         if not sources:
             issues.append('Controller sources are not known')
-        for source in sources:
+        for source in controllers.composite_sources(sources):
             device = devices.get(source)
+            if (Path(source).name == 'go_s:rgb:joystick_rings'
+                    and controllers.preserved_composite(sources)):
+                continue  # LED membership is validated; it is not an input route.
             if device is None:
                 issues.append(f'Cannot inspect controller source: {source}')
             elif not device['virtual'] and device['readable_now']:
