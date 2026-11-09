@@ -77,3 +77,37 @@ class ControllerHotplugTest(unittest.TestCase):
                 self.router.start_controller()
             mutate.assert_not_called()
             watchdog.assert_not_called()
+
+    def test_service_input_target_loads_family_output_manager(self):
+        with mock.patch.dict(os.environ, {'SESSION_SWITCH_INPUT_TARGET': 'ds5-single'}, clear=True):
+            router = overlay.InputRouter(manage=True)
+        self.addCleanup(router.close)
+        self.assertEqual(type(router.playstation).__name__, 'ControllerOutputs')
+        self.assertIsNotNone(router.playstation.sony)
+        self.assertIsNotNone(router.playstation.xbox)
+
+    def test_glyph_family_follows_active_controller_without_release_or_duplicate_changes(self):
+        families = []
+        self.router.input_family.connect(families.append)
+        self.router.target_families.update(xbox='xbox', sony='playstation')
+        self.router.controller_event('xbox', 'ui_down', 1)
+        self.router.controller_event('sony', 'ui_up', 0)
+        self.router.controller_event('xbox', 'ui_down', 1)
+        self.router.controller_event('sony', 'ui_guide', 1)
+        self.assertEqual(families, ['xbox'])
+        self.router.controller_event('sony', 'ui_up', 1)
+        self.assertEqual(families, ['xbox', 'playstation'])
+        self.router.detach_target('sony')
+        self.assertNotIn('sony', self.router.target_families)
+
+    def test_disconnect_stops_owned_empty_composite_and_preserves_other_owners(self):
+        self.router.state['modes'] = {'/owned': 0, '/foreign': 1, '/active': 0}
+        self.router.state['baseline'] = ['/foreign']
+        sources = {'/owned': (), '/foreign': (), '/unknown': (), '/active': ('/dev/hidraw1',)}
+        with mock.patch.object(overlay, 'bus') as bus:
+            result = self.router.retire_disconnected(sources)
+        bus.assert_called_once_with('call', overlay.SERVICE, '/owned', overlay.COMPOSITE, 'Stop')
+        self.assertEqual(set(result), {'/foreign', '/unknown', '/active'})
+        with mock.patch.object(overlay, 'bus') as bus:
+            self.router.retire_disconnected(result)
+        bus.assert_not_called()

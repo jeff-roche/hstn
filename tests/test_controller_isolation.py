@@ -126,3 +126,27 @@ class IsolationTest(unittest.TestCase):
         self.assertEqual(routes.isolation_issues(report, single_playstation=True), [])
         report['routes']['devices'].remove(output)
         self.assertTrue(routes.isolation_issues(report, single_playstation=True))
+
+    def test_xbox_output_count_and_hidden_source_are_required(self):
+        report = self.baseline()
+        source, output = report['routes']['devices']
+        source.update(node='/dev/input/event1', sysfs='/sys/devices/usb/input/input1',
+                      identity={'PRODUCT': '3/45e/b12/1'})
+        output.update(node='/dev/input/event2', sysfs='/sys/devices/virtual/input/input2',
+                      identity={'PRODUCT': '3/45e/b12/1'})
+        report['inputplumber']['composites'][0]['SourceDevicePaths'] = [source['node']]
+        with mock.patch.object(routes.controllers, 'xbox_source', side_effect=lambda node: node == source['node']), \
+             mock.patch.object(routes.controllers, 'supported_parent', return_value='/physical'):
+            self.assertEqual(routes.isolation_issues(report, single_playstation=True), [])
+            report['routes']['devices'].append(dict(output, node='/dev/input/event3',
+                                                   sysfs='/sys/devices/virtual/input/input3'))
+            self.assertTrue(any('one virtual Xbox' in issue for issue in
+                                routes.isolation_issues(report, single_playstation=True)))
+            report['routes']['devices'].pop()
+            source['readable_now'] = True
+            self.assertTrue(any('readable' in issue for issue in
+                                routes.isolation_issues(report, single_playstation=True)))
+            source['readable_now'] = False
+            report['routes']['devices'].pop()
+            self.assertTrue(any('one virtual Xbox' in issue for issue in
+                                routes.isolation_issues(report, single_playstation=True)))

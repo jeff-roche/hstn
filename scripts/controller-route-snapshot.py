@@ -122,7 +122,8 @@ def isolation_issues(report, single_playstation=False):
             for source in composite.get('SourceDevicePaths', []):
                 device = devices.get(source, {})
                 if (source.startswith('/dev/hidraw') and not device.get('virtual', True)
-                        and controllers.source_identity(device.get('identity', {}))):
+                        and controllers.source_identity(device.get('identity', {}))
+                        and controllers.normalized_identity(device.get('identity', {})).endswith(':0000054C:00000CE6')):
                     primary_roots.append(device.get('sysfs', ''))
         if primary_roots:
             virtual_pads = [d for d in devices.values() if d['virtual'] and
@@ -137,6 +138,32 @@ def isolation_issues(report, single_playstation=False):
                        not devices[source]['virtual'] and
                        any(root and devices[source].get('sysfs', '').startswith(root + '/input/')
                            for root in primary_roots) for source in sources):
+                    suppressed.add(composite.get('path'))
+    if single_playstation:
+        # Use the captured identities, not live reusable event/hidraw numbers.
+        def xbox_source(source):
+            device = devices.get(source, {})
+            profile = controllers.SUPPORTED_CONTROLLERS.get(
+                controllers.normalized_identity(device.get('identity', {})), {})
+            return not device.get('virtual', True) and profile.get('output') == 'xbox-series'
+
+        def source_root(source):
+            return devices.get(source, {}).get('sysfs', '').split('/input/')[0]
+
+        xbox_roots = {source_root(source)
+                      for composite in composites for source in composite.get('SourceDevicePaths', [])
+                      if xbox_source(source)}
+        xbox_pads = {device['sysfs'] for device in devices.values() if controllers.xbox_output(device)}
+        if len(xbox_roots) != len(xbox_pads):
+            issues.append('Expected one virtual Xbox output per physical Xbox controller')
+        for composite in composites:
+            sources = composite.get('SourceDevicePaths', [])
+            if (sources and all(xbox_source(source) for source in sources)
+                    and not composite.get('TargetDevices')):
+                roots = {source_root(source) for source in sources}
+                if any(other.get('TargetDevices') and roots == {
+                        source_root(source) for source in other.get('SourceDevicePaths', [])}
+                       for other in composites):
                     suppressed.add(composite.get('path'))
     for composite in composites:
         if composite.get('InterceptMode') not in (1, 2):

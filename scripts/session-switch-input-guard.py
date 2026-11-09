@@ -25,31 +25,80 @@ SOURCE_RULE_NAME='72-hstn-controller-sources.rules'
 # ACL. Final permission assignments also prevent later vendor rules reopening
 # the sources. Match HID ancestry, never reusable hidraw/event numbers. BlueZ
 # UHID sources use bus 0005; InputPlumber's virtual USB outputs use bus 0003.
-SOURCE_RULE='''# HSTN: reserve physical DualSense sources for root InputPlumber.
+SOURCE_RULE='''# HSTN: reserve supported physical controller sources for root InputPlumber.
 ACTION!="add|change", GOTO="hstn_sources_end"
 SUBSYSTEM!="hidraw|input", GOTO="hstn_sources_end"
 KERNEL!="hidraw*|event*|js*|mouse*", GOTO="hstn_sources_end"
 DEVPATH=="/devices/virtual/*", KERNELS=="0003:054C:0CE6.*", GOTO="hstn_sources_end"
 SUBSYSTEMS=="hid", KERNELS=="0003:054C:0CE6.*|0005:054C:0CE6.*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+DEVPATH=="/devices/virtual/*", ATTRS{id/bustype}=="0003", GOTO="hstn_sources_end"
+SUBSYSTEMS=="input", ATTRS{id/bustype}=="0003", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="02d1|02dd|02ea|0b12", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+SUBSYSTEMS=="hid", KERNELS=="0005:045E:02E0.*|0005:045E:02FD.*|0005:045E:0B13.*|0005:045E:0B20.*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+SUBSYSTEMS=="input", ATTRS{id/bustype}=="0005", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="02e0|02fd|0b13|0b20", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
 LABEL="hstn_sources_end"
 '''
 
 
+# Standalone root-owned copy of source detection; parity is tested.
+# Match transport as well as model; emulated USB outputs are never sources.
+PLAYSTATION_OUTPUT_ID = '0003:0000054C:00000CE6'
+SUPPORTED_CONTROLLERS = {
+    '0003:0000054C:00000CE6': {'name': 'USB DualSense', 'output': 'ds5-single', 'transport': 'usb'},
+    '0005:0000054C:00000CE6': {'name': 'Bluetooth DualSense', 'output': 'ds5-single', 'transport': 'bluetooth'},
+}
+
+# Official standard Xbox One / One S / Series models. Transport is significant.
+XBOX_USB_PRODUCTS = ('02D1', '02DD', '02EA', '0B12')
+XBOX_BT_PRODUCTS = ('02E0', '02FD', '0B13', '0B20')
+for bus, products, transport in (('0003', XBOX_USB_PRODUCTS, 'usb'),
+                                  ('0005', XBOX_BT_PRODUCTS, 'bluetooth')):
+    for product in products:
+        SUPPORTED_CONTROLLERS[f'{bus}:0000045E:0000{product}'] = {
+            'name': 'Xbox One / Series', 'output': 'xbox-series', 'transport': transport}
+
+
+def normalized_identity(identity):
+    if identity.get('HID_ID'):
+        return identity['HID_ID'].upper()
+    try:
+        bus, vendor, product, _ = identity.get('PRODUCT', '').split('/')
+        return f'{int(bus, 16):04X}:{int(vendor, 16):08X}:{int(product, 16):08X}'
+    except ValueError:
+        return ''
+
+
+def source_identity(identity, sysfs_virtual=False):
+    profile = SUPPORTED_CONTROLLERS.get(normalized_identity(identity))
+    # BlueZ can expose physical Bluetooth HID through UHID. HSTN outputs use
+    # USB HID identity, so the bus distinguishes these from Bluetooth sources.
+    return bool(profile and (not sysfs_virtual or profile['transport'] == 'bluetooth'))
+
+
+def supported_parent(source, sysfs=Path('/sys')):
+    name = Path(source).name
+    subsystem = 'hidraw' if name.startswith('hidraw') else 'input'
+    device = (Path(sysfs)/'class'/subsystem/name/'device').resolve()
+    virtual = Path(sysfs)/'devices/virtual' in device.parents
+    candidate = None
+    for parent in (device, *device.parents):
+        try:
+            identity = dict(line.split('=', 1) for line in (parent/'uevent').read_text().splitlines() if '=' in line)
+            if source_identity(identity, virtual):
+                if identity.get('HID_ID'):
+                    return str(parent)
+                # xpad exposes PRODUCT on the input root without a HID ancestor.
+                candidate = str(parent)
+        except OSError:
+            pass
+        if parent == Path(sysfs):
+            break
+    return candidate
+
+
 def supported_source_paths(sysfs=Path('/sys')):
-    paths=[]
-    entries=[*sysfs.glob('class/hidraw/hidraw*'), *sysfs.glob('class/input/event*'),
-             *sysfs.glob('class/input/js*'), *sysfs.glob('class/input/mouse*')]
-    for entry in entries:
-        device=(entry/'device').resolve()
-        virtual=Path(sysfs)/'devices/virtual' in device.parents
-        for parent in (device, *device.parents):
-            if parent == Path(sysfs):break
-            try:lines=(parent/'uevent').read_text().splitlines()
-            except OSError:continue
-            if ('HID_ID=0005:0000054C:00000CE6' in lines or
-                    (not virtual and 'HID_ID=0003:0000054C:00000CE6' in lines)):
-                paths.append(str(entry));break
-    return paths
+    return [str(entry) for pattern in ('class/hidraw/hidraw*', 'class/input/event*',
+                                      'class/input/js*', 'class/input/mouse*')
+            for entry in Path(sysfs).glob(pattern) if supported_parent(entry.name, sysfs)]
 
 
 def refresh_sources():
@@ -74,7 +123,7 @@ def physical_node(node, sysfs=Path('/sys')):
     # BlueZ physical Bluetooth sources can live under virtual/misc/uhid.
     # Keep USB-emulated HSTN outputs excluded. This root helper stays standalone.
     try:
-        return 'HID_ID=0005:0000054C:00000CE6' in (device/'uevent').read_text().splitlines()
+        return bool(supported_parent(node, sysfs))
     except OSError:
         return False
 

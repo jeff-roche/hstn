@@ -1,7 +1,7 @@
 # Installing HSTN
 
 HSTN currently targets **Bazzite KDE with Steam, Heroic Flatpak, Gamescope
-session-plus and DualSense over USB or Bluetooth**. USB has prior live testing;
+session-plus and DualSense, Xbox One, or Xbox Series X|S over USB or Bluetooth**. USB has prior live testing;
 Bluetooth routing and reconnection have automated coverage and need live
 acceptance. An installer does not establish support for other distributions/controllers. Install, upgrade and remove from KDE
 Desktop with games closed. Close Steam and Heroic first, or use `-c` to authorize
@@ -183,7 +183,7 @@ Bluetooth feedback/suspend/resume, and Steam's built-in power-menu lid-guard
 coverage remain unvalidated. Pair Bluetooth devices through KDE before use;
 the installer does not configure Bluetooth adapters or pairing.
 
-The input guard reserves physical DualSense nodes before session access is granted,
+The input guard reserves supported physical controller nodes before session access is granted,
 so Steam cannot open a newly connected controller before HSTN routes it. Steam
 uses the virtual output. This reservation lasts while the guard runs, including
 between sessions; stopping the guard removes its owned runtime rule and restores
@@ -221,3 +221,18 @@ Before publishing: choose the project license, review third-party artwork
 redistribution/attribution (including Heroic's official icon), choose the public
 repository/release URLs, set a release version, and complete live acceptance on a
 clean supported installation. This development archive has not been published.
+
+## Xbox controllers
+
+Official standard Xbox One and Series X|S controllers use one virtual Xbox Series
+output per physical controller. USB and Bluetooth are supported where the model
+supports that transport. Pair through KDE before use. HSTN uses the installed
+Bazzite driver stack and InputPlumber profiles; it does not install kernel drivers
+or update firmware. Xbox 360, Elite-specific features, third-party controllers,
+and proprietary wireless adapters are outside this support scope.
+
+Hold Xbox and press View to open HSTN; A selects and B dismisses. Xbox alone
+retains launcher behavior. Mixed Xbox and DualSense controllers retain their
+respective output families. Xbox routing has fixture-based automated coverage;
+live USB/Bluetooth input, rumble, reconnection, suspend/resume, game prompts,
+and session transitions still require Bazzite hardware acceptance.

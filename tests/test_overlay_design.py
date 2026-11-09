@@ -29,6 +29,18 @@ for width,height in [(854,480),(1280,800),(1920,1080)]:
  for name in ('cross','circle'):
   icon=menu.footer.glyphs[name];text=menu.footer.labels[name]
   assert abs(icon.mapTo(menu,icon.rect().center()).y()-text.mapTo(menu,text.rect().center()).y())<=1
+ # Prompts follow the physical controller family, then real keyboard navigation.
+ assert menu.input_family=='keyboard'
+ for family, words in [('xbox','A: select. B: back.'),('playstation','Cross: select. Circle: back.')]:
+  menu.set_input_family(family)
+  assert menu.footer.accessibleName()==words
+  assert all(not label.pixmap().isNull() for label in menu.footer.glyphs.values())
+  app.processEvents()
+  if width==1280:
+   menu.grab().save('/tmp/hstn-glyphs-'+family+'.png')
+ menu.set_input_family('keyboard');app.processEvents()
+ if width==1280:
+  menu.grab().save('/tmp/hstn-glyphs-keyboard.png')
  assert menu.buttons[1].current and not menu.buttons[0].current
  assert menu.active_indices()==[0,1,2]
  assert all(not b.art.isNull() for b in menu.buttons)
@@ -38,7 +50,10 @@ for width,height in [(854,480),(1280,800),(1920,1080)]:
   assert menu.buttons[index].geometry().right()<menu.buttons[index+1].geometry().left()
  # Qt delivers Tab through event(), rather than keyPressEvent().
  app.sendEvent(menu,m.QtGui.QKeyEvent(m.QtCore.QEvent.KeyPress,m.QtCore.Qt.Key_Tab,m.QtCore.Qt.NoModifier))
- assert menu.selection==1
+ assert menu.selection==1 and menu.input_family=='keyboard'
+ menu.set_input_family('xbox')
+ app.sendEvent(menu,m.QtGui.QKeyEvent(m.QtCore.QEvent.KeyPress,m.QtCore.Qt.Key_Left,m.QtCore.Qt.NoModifier))
+ assert menu.input_family=='keyboard' and menu.selection==0
  menu.planner=mock.Mock();menu.planner.busy=False
  menu.request=mock.Mock();menu.request.busy=False;menu.closer=mock.Mock()
  menu.choose(0);menu.choose(0);assert menu.planner.start.call_count==1
@@ -49,6 +64,10 @@ for width,height in [(854,480),(1280,800),(1920,1080)]:
  assert 'could not be identified' in menu.status.text()
  bar=menu.status_scroll.verticalScrollBar();assert bar.maximum()>0
  menu.scroll_details(1);assert bar.value()>0
+ for family, scroll in [('keyboard','Page Up'),('xbox','LB or RB'),('playstation','L1 or R1')]:
+  menu.set_input_family(family)
+  assert scroll in menu.footer.accessibleName()
+  assert not menu.footer.scroll.isHidden()
  for button in menu.buttons[:2]:
   position=button.mapTo(menu,m.QtCore.QPoint(0,0))
   assert position.y()+button.height()<menu.height()
@@ -74,7 +93,7 @@ menu.hide()
 spec=importlib.util.spec_from_file_location('package',Path('installer/package.py'))
 package=importlib.util.module_from_spec(spec);spec.loader.exec_module(package)
 inventory=package.inventory(Path.cwd())
-for name in ('assets/logo/hstn-rocket-256.png','assets/controller/cross.svg','assets/controller/circle.svg','assets/controller/l1.svg','assets/controller/r1.svg'):
+for name in ('assets/controller/xbox-a.svg','assets/controller/xbox-b.svg','assets/controller/xbox-lb.svg','assets/controller/xbox-rb.svg','assets/controller/keyboard-enter.svg','assets/controller/keyboard-escape.svg','assets/controller/keyboard-page-up.svg','assets/controller/keyboard-page-down.svg','assets/logo/hstn-rocket-256.png','assets/controller/cross.svg','assets/controller/circle.svg','assets/controller/l1.svg','assets/controller/r1.svg'):
  assert name in inventory
  assert not m.QtGui.QPixmap(str(Path(name))).isNull(),name
 print('DESIGN_PASS')
