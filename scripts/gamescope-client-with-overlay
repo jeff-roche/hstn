@@ -48,6 +48,9 @@ with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as strea
     # HID/button/motion/touchpad siblings must not expose duplicate DS5 pads.
     stream.write('SESSION_SWITCH_INPUT_TARGET=ds5-single\n')
     stream.write('SESSION_SWITCH_REQUIRE_INPUT_GUARD=1\n')
+    session = {'heroic-gamescope': 'heroic', 'steam': 'steam'}.get(sys.argv[2])
+    if session:
+        stream.write(f'SESSION_SWITCH_CURRENT_SESSION={session}\n')
     for name in ('DISPLAY','XAUTHORITY'):
         stream.write(f'{name}={json.dumps(os.environ.get(name,""))}\n')
 os.replace(pending,path)

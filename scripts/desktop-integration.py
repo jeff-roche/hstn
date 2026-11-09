@@ -51,12 +51,14 @@ def install_files(root, home, data, config, desktop, runtime_root=None):
     for key, title, command, icon in (
         ('steam', 'Switch to Steam', [hstn, 'switch', 'steam'], runtime/manifest['assets_dir']/manifest['destinations']['steam']['images']['icon']),
         ('heroic', 'Switch to Heroic', [hstn, 'switch', 'heroic'], runtime/manifest['assets_dir']/manifest['destinations']['heroic']['images']['icon']),
-        ('open', 'Open HSTN', [helper, 'open'], 'applications-games'),
+        ('open', 'Open HSTN', [helper, 'open'], runtime/'assets/logo/hstn-rocket-256.png'),
     ):
         text = '\n'.join(['[Desktop Entry]', 'Type=Application', f'Name={title}',
             'Comment=HSTN — Mission control for Linux gaming sessions',
             'Exec=' + ' '.join(exec_arg(arg) for arg in ['/usr/bin/python3', '-B', *command]),
-            'Icon=' + string_value(icon), 'Terminal=false', 'Categories=Game;', 'StartupNotify=false', ''])
+            'Icon=' + string_value(icon),
+            *(['StartupWMClass=hstn-overlay'] if key == 'open' else []),
+            'Terminal=false', 'Categories=Game;', 'StartupNotify=false', ''])
         name = f'hstn-{key}.desktop'
         files[Path(data)/'applications'/name] = (text, 0o644)
         files[Path(desktop)/name] = (text, 0o755)

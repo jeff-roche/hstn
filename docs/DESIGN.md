@@ -116,3 +116,8 @@ For a targeted revision, say what changes and explicitly preserve everything els
 - Square icon contains no text; details banner leaves the overlay area clear.
 - Export dimensions are checked, including the exact 3840 × 1240 details banner.
 - Library integration preserves working launch settings and uses portrait art in Heroic's `art_square` field.
+
+## Overlay UI
+
+The native overlay follows the approved [Launch Deck handoff](ui-redesign/brief.md).
+See [implementation and validation](ui-redesign/README.md) for screenshots and acceptance status.

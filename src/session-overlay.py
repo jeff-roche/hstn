@@ -6,6 +6,7 @@
 Hold Guide/PS, then press Create/Select to open; PS alone passes to launcher; D-pad selects; Cross/South selects; East closes. Esc closes.
 """
 import argparse
+import html
 import json
 import os
 from pathlib import Path
@@ -484,6 +485,114 @@ class DemoGame(QtWidgets.QWidget):
             print(f'Underlay X count: {self.count}', flush=True)
 
 
+ASSETS = Path(__file__).resolve().parents[1] / 'assets'
+
+
+def application_icon():
+    icon = QtGui.QIcon()
+    for size in (24, 48, 256):
+        icon.addFile(str(ASSETS / 'logo' / f'hstn-rocket-{size}.png'), QtCore.QSize(size, size))
+    return icon
+
+
+class DestinationButton(QtWidgets.QPushButton):
+    """A native button with uncropped doorway art and live destination text."""
+    def __init__(self, name, target, parent=None):
+        super().__init__(name, parent)
+        self.target = target
+        self.current = False
+        self.art = QtGui.QPixmap(str(ASSETS / 'artwork' / f'switch-to-{target}-icon.png'))
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.setMinimumSize(0, 0)
+
+    def minimumSizeHint(self):
+        return QtCore.QSize(0, 0)
+
+    def paintEvent(self, event):
+        if self.property('action'):
+            return super().paintEvent(event)
+        painter = QtGui.QPainter(self)
+        option = QtWidgets.QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = ''
+        self.style().drawControl(QtWidgets.QStyle.CE_PushButton, option, painter, self)
+        margin = max(10, int(self.width() * .05))
+        font = self.font()
+        ratio = .075 if self.text().startswith('Switch to ') else .10
+        font.setPixelSize(max(15, min(36, int(self.width() * ratio))))
+        font.setBold(True)
+        name_height = QtGui.QFontMetrics(font).height()
+        badge_font = QtGui.QFont(font)
+        badge_font.setPixelSize(max(12, int(font.pixelSize() * .65)))
+        badge_height = QtGui.QFontMetrics(badge_font).height()
+        # Reserve the same badge slot on all cards so destination names align.
+        bottom_padding = max(12, margin)
+        badge_gap = max(3, int(self.width() * .015))
+        label_top = self.height() - bottom_padding - badge_height - badge_gap - name_height
+        image_label_gap = max(12, int(self.width() * .045))
+        area = QtCore.QRect(margin, margin, self.width()-2*margin,
+                           max(1, label_top-image_label_gap-margin))
+        art = self.art.scaled(area.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
+        painter.drawPixmap(area.center() - art.rect().center(), art)
+        painter.setPen(QtGui.QColor('#FFF5E2'))
+        painter.setFont(font)
+        label = QtCore.QRect(margin, label_top, self.width()-2*margin, name_height)
+        name = self.text() if self.text().startswith('Switch to ') else self.text().upper()
+        painter.drawText(label, QtCore.Qt.AlignCenter, name)
+        if self.current:
+            painter.setFont(badge_font)
+            badge = QtCore.QRect(margin, label.bottom()+1+badge_gap,
+                                 self.width()-2*margin, badge_height)
+            painter.drawText(badge, QtCore.Qt.AlignCenter, 'Current')
+
+
+class ControllerFooter(QtWidgets.QWidget):
+    """Center prompt images and text in native layout cells, without HTML baselines."""
+    def __init__(self):
+        super().__init__()
+        self.glyphs = {}
+        self.labels = {}
+        self.rows = []
+        row = QtWidgets.QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch()
+        self.scroll = QtWidgets.QWidget()
+        scroll_row = QtWidgets.QHBoxLayout(self.scroll)
+        scroll_row.setContentsMargins(0, 0, 0, 0)
+        self.add_glyph(scroll_row, 'l1')
+        scroll_row.addWidget(QtWidgets.QLabel('/'))
+        self.add_glyph(scroll_row, 'r1')
+        scroll_row.addWidget(QtWidgets.QLabel('Scroll apps ·'))
+        row.addWidget(self.scroll)
+        self.rows.extend((row, scroll_row))
+        for name, text in (('cross', 'Select'), ('circle', 'Back')):
+            prompt = QtWidgets.QWidget()
+            prompt_row = QtWidgets.QHBoxLayout(prompt)
+            prompt_row.setContentsMargins(0, 0, 0, 0)
+            self.add_glyph(prompt_row, name)
+            self.labels[name] = QtWidgets.QLabel(text)
+            prompt_row.addWidget(self.labels[name])
+            row.addWidget(prompt)
+            self.rows.append(prompt_row)
+        row.addWidget(QtWidgets.QLabel('· Enter / Esc'))
+
+    def add_glyph(self, row, name):
+        label = QtWidgets.QLabel()
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        row.addWidget(label)
+        self.glyphs[name] = label
+
+    def configure(self, review, size):
+        self.scroll.setVisible(review)
+        for row in self.rows:
+            row.setSpacing(max(3, size//6))
+        for name, label in self.glyphs.items():
+            label.setFixedSize(size, size)
+            label.setPixmap(QtGui.QIcon(str(ASSETS / f'controller/{name}.svg')).pixmap(size, size))
+        self.setAccessibleName(('L1 or R1, Page Up or Page Down: scroll apps. ' if review else '') +
+                               'Cross or Enter: select. Circle or Escape: back.')
+
+
 class Overlay(QtWidgets.QWidget):
     def __init__(self, router=None, underlay=None, enable_actions=True, desktop=False):
         super().__init__()
@@ -501,45 +610,141 @@ class Overlay(QtWidgets.QWidget):
         self.pending_target = None
         self.plan_path = None
         self.setWindowTitle('HSTN — Session menu')
+        self.setWindowIcon(application_icon())
         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
         self.selection = 0
         self.buttons = []
+        self.current_session = 'desktop' if desktop else os.environ.get('SESSION_SWITCH_CURRENT_SESSION')
         layout = QtWidgets.QVBoxLayout(self)
-        layout.addStretch()
-        panel = QtWidgets.QFrame();panel.setObjectName('panel');panel.setMaximumWidth(640)
-        inside = QtWidgets.QVBoxLayout(panel);inside.setContentsMargins(36,30,36,30)
-        title = QtWidgets.QLabel('Switch session');title.setObjectName('title');title.setMinimumHeight(48);inside.addWidget(title);self.title=title
-        self.status = QtWidgets.QLabel('Choose a session. Running apps will be listed for confirmation.' if enable_actions else 'Demo: session switching is disabled.')
-        self.status.setWordWrap(True)
-        self.status.setTextFormat(QtCore.Qt.PlainText)
-        self.status.setAlignment(QtCore.Qt.AlignTop)
-        self.status.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Minimum)
-        self.status_scroll = QtWidgets.QScrollArea()
-        self.status_scroll.setWidgetResizable(True)
-        self.status_scroll.setWidget(self.status)
-        self.status_scroll.setFixedHeight(176)
-        self.status_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
-        self.status_scroll.setStyleSheet('QScrollArea {background:transparent;border:none;} QScrollArea QWidget {background:transparent;}')
-        inside.addWidget(self.status_scroll)
+        layout.setSizeConstraint(QtWidgets.QLayout.SetNoConstraint)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.panel = QtWidgets.QFrame()
+        self.panel.setObjectName('panel')
+        self.inside = inside = QtWidgets.QVBoxLayout(self.panel)
+        header = QtWidgets.QHBoxLayout()
+        self.logo = QtWidgets.QLabel()
+        self.logo_art = QtGui.QPixmap(str(ASSETS / 'logo/hstn-rocket-256.png'))
+        self.logo.setAlignment(QtCore.Qt.AlignCenter)
+        header.addWidget(self.logo)
+        wordmark = QtWidgets.QLabel('HSTN')
+        wordmark.setObjectName('wordmark')
+        header.addWidget(wordmark)
+        header.addStretch()
+        inside.addLayout(header)
+        line = QtWidgets.QFrame()
+        line.setObjectName('divider')
+        line.setFixedHeight(1)
+        inside.addWidget(line)
+        self.title = QtWidgets.QLabel('Switch session')
+        self.title.setObjectName('title')
+        inside.addWidget(self.title)
+        self.subtitle = QtWidgets.QLabel('Save your progress first. These apps will be closed.')
+        self.subtitle.setWordWrap(True)
+        self.subtitle.hide()
+        inside.addWidget(self.subtitle)
+        self.body = QtWidgets.QHBoxLayout()
+        self.deck = QtWidgets.QWidget()
+        self.deck_layout = QtWidgets.QHBoxLayout(self.deck)
+        self.deck_layout.setContentsMargins(0, 0, 0, 0)
         self.menu_names = ('Steam', 'Heroic', 'Desktop', 'Return to Desktop' if desktop else 'Return to game')
-        for name in self.menu_names:
-            button = QtWidgets.QPushButton(name);button.setMinimumHeight(62)
+        for index, name in enumerate(self.menu_names):
+            button = DestinationButton(name, ('steam', 'heroic', 'desktop', 'desktop')[index])
             button.setFocusPolicy(QtCore.Qt.NoFocus)
             button.setMouseTracking(True)
             button.installEventFilter(self)
-            index = len(self.buttons)
             button.clicked.connect(lambda checked=False, index=index: self.choose(index))
-            self.buttons.append(button);inside.addWidget(button)
-        inside.addWidget(QtWidgets.QLabel('D-pad: choose · Cross: select · Circle: back\nL1 / R1: scroll app details'))
-        layout.addWidget(panel, alignment=QtCore.Qt.AlignCenter);layout.addStretch()
-        self.setStyleSheet('''#panel {background:#101f36; border:2px solid #7689ad; border-radius:18px;}
-            QLabel {color:#f7f3e8; font-size:18px;} #title {font-size:34px; font-weight:bold;}
-            QPushButton {background:#213453; color:#f7f3e8; border:2px solid transparent; border-radius:10px; font-size:24px;}
-            QPushButton[selected="true"] {background:#354e7b; border:2px solid #cfdbff;}''')
+            button.current = button.target == self.current_session
+            button.setAccessibleName(name + (' — Current' if button.current else ''))
+            self.buttons.append(button)
+            if index < 3:
+                self.deck_layout.addWidget(button)
+            else:
+                button.setParent(self)
+                button.hide()
+        self.body.addWidget(self.deck)
+        self.review_left = QtWidgets.QWidget()
+        self.review_layout = QtWidgets.QVBoxLayout(self.review_left)
+        self.review_layout.setContentsMargins(0, 0, 0, 0)
+        self.review_left.hide()
+        self.body.addWidget(self.review_left, 2)
+        self.status = QtWidgets.QLabel('Review running apps before switching.' if enable_actions else 'Demo: session switching is disabled.')
+        self.status.setWordWrap(True)
+        self.status.setTextFormat(QtCore.Qt.PlainText)
+        self.status.setAlignment(QtCore.Qt.AlignTop)
+        self.status.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Preferred)
+        self.status_scroll = QtWidgets.QScrollArea()
+        self.status_scroll.setWidgetResizable(True)
+        self.status_scroll.setWidget(self.status)
+        self.status_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.destination = DestinationButton('Switch to Steam', 'steam')
+        self.destination.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.destination.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self.destination.hide()
+        self.body.addWidget(self.destination)
+        inside.addLayout(self.body, 1)
+        inside.addWidget(self.status_scroll)
+        self.actions = QtWidgets.QHBoxLayout()
+        inside.addLayout(self.actions)
+        line = QtWidgets.QFrame()
+        line.setObjectName('divider')
+        line.setFixedHeight(1)
+        inside.addWidget(line)
+        self.footer = ControllerFooter()
+        inside.addWidget(self.footer)
+        layout.addWidget(self.panel, alignment=QtCore.Qt.AlignCenter)
+        self.resize(1280, 800)
+        self.update_metrics()
         if router:
             router.action.connect(self.controller)
+
+    def update_metrics(self):
+        # Bound the panel in logical pixels rather than growing with a desktop monitor.
+        panel_width = min(960, int(self.width() * .88))
+        panel_height = min(620, int(self.height() * .86))
+        scale = min(panel_width / 1126, panel_height / 688)
+        unit = lambda value: max(1, int(value * scale))
+        self.panel.setFixedSize(panel_width, panel_height)
+        self.inside.setContentsMargins(unit(36), unit(20), unit(36), unit(20))
+        self.inside.setSpacing(unit(14))
+        self.deck_layout.setSpacing(unit(14))
+        self.body.setSpacing(unit(28))
+        self.actions.setSpacing(unit(18))
+        self.logo.setFixedSize(unit(48), unit(60))
+        self.logo.setPixmap(self.logo_art.scaled(self.logo.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self.update_footer(max(26, unit(40)))
+        self.status_scroll.setMinimumWidth(0)
+        self.status_scroll.setMinimumHeight(unit(48) if self.mode not in ('confirm', 'closing') else 0)
+        self.status_scroll.setMaximumHeight(unit(68) if self.mode not in ('confirm', 'closing') else 16777215)
+        for button in self.buttons:
+            if button.property('action'):
+                button.setFixedHeight(unit(68))
+        self.setStyleSheet(f"""
+            #panel {{background:#06152E; border:1px solid #314057; border-radius:{unit(24)}px;}}
+            QLabel {{color:#FFF5E2; font-size:{max(14, unit(23))}px; background:transparent;}}
+            #wordmark {{font-size:{unit(36)}px; font-weight:bold;}}
+            #title {{font-size:{max(24, unit(54))}px; font-weight:bold;}}
+            #divider {{background:#526071; border:none;}}
+            QPushButton {{background:#07182F; color:#FFF5E2; border:3px solid #233951;
+                border-radius:{unit(16)}px; font-size:{max(16, unit(28))}px; font-weight:bold;}}
+            QPushButton[destructive="true"] {{color:#FFD15A;}}
+            QPushButton[selected="true"] {{border:{max(3, unit(5))}px solid #FFF5E2;}}
+            QPushButton:disabled {{color:#9DA7B5; border-color:#233951;}}
+            QScrollArea, QScrollArea QWidget {{background:transparent; border:none;}}
+            QScrollBar:vertical {{background:#102440; width:{unit(12)}px;}}
+            QScrollBar::handle:vertical {{background:#8191A8; min-height:20px;}}
+        """)
+
+    def update_footer(self, size=None):
+        if size is None:
+            scale = min(self.panel.width() / 1126, self.panel.height() / 688)
+            size = max(26, int(40 * scale))
+        self.footer.configure(self.mode in ('confirm', 'closing'), size)
+
+    def resizeEvent(self, event):
+        self.update_metrics()
+        super().resizeEvent(event)
 
     def paintEvent(self, event):
         painter=QtGui.QPainter(self);painter.fillRect(self.rect(),QtGui.QColor(0,0,0,150))
@@ -605,7 +810,7 @@ class Overlay(QtWidgets.QWidget):
         self.status.setText('Controller unavailable: ' + message + '\nUse mouse or keyboard to access HSTN.')
 
     def active_indices(self):
-        return [index for index, button in enumerate(self.buttons) if not button.isHidden()]
+        return [index for index, button in enumerate(self.buttons) if not button.isHidden() and button.isEnabled()]
 
     def discard_plan(self, path):
         if not path:
@@ -620,12 +825,29 @@ class Overlay(QtWidgets.QWidget):
         self.pending_target = None
         self.plan_path = None
         self.title.setText('Switch session')
-        self.status_scroll.setFixedHeight(176)
+        self.update_footer()
+        self.subtitle.hide()
+        self.destination.hide()
+        self.review_left.hide()
+        self.inside.insertWidget(2, self.title)
+        self.inside.insertWidget(3, self.subtitle)
+        self.title.show()
+        self.deck.show()
+        self.inside.insertWidget(5, self.status_scroll)
+        self.status.setTextFormat(QtCore.Qt.PlainText)
+        for index, button in enumerate(self.buttons[:3]):
+            button.setProperty('action', False)
+            button.setProperty('destructive', False)
+            button.setMaximumHeight(16777215)
+            button.setMinimumHeight(0)
+            self.deck_layout.addWidget(button)
+            button.setAccessibleName(self.menu_names[index] + (' — Current' if button.current else ''))
         for index, name in enumerate(self.menu_names):
             self.buttons[index].setText(name)
             self.buttons[index].setEnabled(True)
-            self.buttons[index].show()
+            self.buttons[index].setVisible(index < 3)
         self.selection = 0
+        self.update_metrics()
         self.highlight()
 
     def cancel_review(self):
@@ -634,6 +856,11 @@ class Overlay(QtWidgets.QWidget):
         self.status.setText('Cancelled. Your apps are still running.')
 
     def choose(self, index):
+        if index == 3 and self.mode == 'menu':
+            self.hide_overlay()
+            return
+        if index not in self.active_indices() or not self.buttons[index].isEnabled():
+            return
         self.selection = index
         if not self.enable_actions:
             if index == 3:
@@ -684,23 +911,42 @@ class Overlay(QtWidgets.QWidget):
         self.mode = 'confirm'
         self.plan_path = plan['path']
         self.title.setText('Close and switch?')
-        self.status_scroll.setFixedHeight(300)
-        lines = ['Save your progress first. These apps will be closed:',
-                 '\n'.join(f"• {app['label']}" for app in plan['apps']),
-                 f'Switch to {self.pending_target.title()} after closing?']
-        if plan.get('warnings'):
-            lines.append('Some processes could not be identified. They will not be force-closed.')
-        lines.append('Process details:')
+        self.deck.hide()
+        self.review_layout.addWidget(self.title)
+        self.review_layout.addWidget(self.subtitle)
+        self.review_layout.addWidget(self.status_scroll, 1)
+        self.title.show()
+        self.subtitle.show()
+        self.status_scroll.show()
+        self.review_left.show()
+        self.destination.target = self.pending_target
+        self.destination.art = QtGui.QPixmap(str(ASSETS / 'artwork' / f'switch-to-{self.pending_target}-icon.png'))
+        self.destination.setText('Switch to ' + self.pending_target.title())
+        self.body.setStretchFactor(self.destination, 1)
+        self.destination.show()
+        lines = []
         for app in plan['apps']:
             names = ', '.join(sorted({process['name'] for process in app['processes']}))
-            lines.append(f"{app['label']}: {names}")
-        self.status.setText('\n\n'.join(lines))
+            lines.append(f"<p><big><b>{html.escape(app['label'])}</b></big><br><small>Process details: {html.escape(names)}</small></p>")
+        if plan.get('warnings'):
+            lines.append('<p>Some processes could not be identified. They will not be force-closed.</p>')
+        self.status.setTextFormat(QtCore.Qt.RichText)
+        self.status.setText(''.join(lines))
         self.status_scroll.verticalScrollBar().setValue(0)
         for index, button in enumerate(self.buttons):
             button.setEnabled(True)
             button.setVisible(index < 2)
+            if index < 2:
+                button.setProperty('action', True)
+                button.setProperty('destructive', index == 0)
+                self.actions.addWidget(button)
+                button.show()
         self.buttons[0].setText('Close and switch')
         self.buttons[1].setText('Cancel')
+        self.buttons[0].setAccessibleName('Close and switch')
+        self.buttons[1].setAccessibleName('Cancel')
+        self.update_footer()
+        self.update_metrics()
         self.selection = 1  # Cancellation is the default.
         self.highlight()
 
@@ -746,6 +992,8 @@ class Overlay(QtWidgets.QWidget):
 
     def navigate(self, direction):
         indices = self.active_indices()
+        if not indices:
+            return
         current = indices.index(self.selection) if self.selection in indices else 0
         self.selection = indices[(current+direction)%len(indices)]
         self.highlight()
@@ -760,13 +1008,20 @@ class Overlay(QtWidgets.QWidget):
             elif event == 'ui_l1':self.scroll_details(-1)
             elif event == 'ui_r1':self.scroll_details(1)
 
+    def event(self, event):
+        if event.type() == QtCore.QEvent.KeyPress and event.key() in (QtCore.Qt.Key_Tab, QtCore.Qt.Key_Backtab):
+            self.navigate(-1 if event.key() == QtCore.Qt.Key_Backtab or event.modifiers() & QtCore.Qt.ShiftModifier else 1)
+            return True
+        return super().event(event)
+
     def keyPressEvent(self, event):
         if event.key() in (QtCore.Qt.Key_Escape,QtCore.Qt.Key_F8):self.cancel_or_hide()
         elif event.key() == QtCore.Qt.Key_PageUp:self.scroll_details(-1)
         elif event.key() == QtCore.Qt.Key_PageDown:self.scroll_details(1)
         elif event.key() in (QtCore.Qt.Key_Down,QtCore.Qt.Key_Right):self.navigate(1)
         elif event.key() in (QtCore.Qt.Key_Up,QtCore.Qt.Key_Left):self.navigate(-1)
-        elif event.key() in (QtCore.Qt.Key_Return,QtCore.Qt.Key_Enter):self.choose(self.selection)
+        elif event.key() in (QtCore.Qt.Key_Return,QtCore.Qt.Key_Enter,QtCore.Qt.Key_Space):self.choose(self.selection)
+        elif event.key() == QtCore.Qt.Key_Tab:self.navigate(-1 if event.modifiers() & QtCore.Qt.ShiftModifier else 1)
 
     def closeEvent(self, event):
         self.hide_overlay();event.ignore()
@@ -809,6 +1064,9 @@ def main():
         os.environ.pop('SESSION_SWITCH_DESKTOP_MODE', None)
     app=QtWidgets.QApplication(sys.argv[:1]);app.setQuitOnLastWindowClosed(False)
     app.setApplicationName('hstn-overlay')
+    app.setApplicationDisplayName('HSTN')
+    app.setDesktopFileName('hstn-open')
+    app.setWindowIcon(application_icon())
     router=InputRouter(args.manage_input, lease) if args.controller or args.manage_input else None
     controller_error = None
     if router:
