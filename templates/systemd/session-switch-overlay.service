@@ -9,7 +9,7 @@ ConditionPathExists=%t/session-switch-overlay.env
 [Service]
 Type=simple
 EnvironmentFile=%t/session-switch-overlay.env
-ExecStart=/usr/bin/python3 %h/.local/bin/session-overlay-prototype --start-hidden --manage-input --timeout 0
+ExecStart=/usr/bin/python3 %h/.local/bin/hstn-overlay --start-hidden --manage-input --timeout 0
 KillMode=mixed
 TimeoutStopSec=30
 Restart=no

@@ -14,7 +14,7 @@ COMMANDS = {
     'switch': ROOT / 'scripts/session-switch',
     'configure': ROOT / 'scripts/configure-launchers.py',
     'activity': ROOT / 'scripts/game-activity.py',
-    'overlay': ROOT / 'prototypes/session-overlay.py',
+    'overlay': ROOT / 'src/session-overlay.py',
 }
 HELP = """HSTN (pronounced Houston) — Mission control for Linux gaming sessions.
 

@@ -66,8 +66,8 @@ def install_files(root, home, data, config, desktop, runtime_root=None):
         'OnlyShowIn=KDE;', 'Terminal=false', 'X-KDE-autostart-phase=2', ''])
     files[Path(config)/'autostart/hstn-desktop-overlay.desktop'] = (autostart, 0o644)
     template = (root/'templates/systemd/hstn-desktop-overlay.service').read_text()
-    command = unit_arg(runtime/'prototypes/session-overlay.py')
-    template = template.replace('"@ROOT@/prototypes/session-overlay.py"', command)
+    command = unit_arg(runtime/'src/session-overlay.py')
+    template = template.replace('"@ROOT@/src/session-overlay.py"', command)
     files[Path(config)/'systemd/user'/UNIT] = (template, 0o644)
     # Install the conflict/ordering change along with the existing Gamescope unit.
     files[Path(config)/'systemd/user/session-switch-overlay.service'] = (

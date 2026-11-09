@@ -11,6 +11,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import importlib.util
+
+_spec = importlib.util.spec_from_file_location('route_controllers', Path(__file__).with_name('supported-controllers.py'))
+controllers = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(controllers)
 
 
 def device_routes(sysfs=Path('/sys'), proc=Path('/proc'), dev=Path('/dev')):
@@ -22,14 +27,21 @@ def device_routes(sysfs=Path('/sys'), proc=Path('/proc'), dev=Path('/dev')):
             device = (entry / 'device').resolve(strict=True)
             relative = device.relative_to(sysfs / 'devices')
             identity = {}
-            event_file = device / 'uevent'
-            if event_file.exists():
-                for line in event_file.read_text().splitlines():
-                    key, _, value = line.partition('=')
-                    if key in ('HID_ID', 'HID_NAME', 'PRODUCT', 'NAME'):
-                        identity[key] = value
+            for parent in (device, *device.parents):
+                if parent == sysfs:
+                    break
+                event_file = parent / 'uevent'
+                if event_file.exists():
+                    for line in event_file.read_text().splitlines():
+                        key, _, value = line.partition('=')
+                        if key in ('HID_ID', 'HID_NAME', 'PRODUCT', 'NAME'):
+                            identity.setdefault(key, value)
+                if 'HID_ID' in identity:
+                    break
+            sysfs_virtual = relative.parts[0] == 'virtual'
             devices.append({'node': str(node), 'sysfs': str(device),
-                            'virtual': relative.parts[0] == 'virtual',
+                            'virtual': sysfs_virtual and not controllers.source_identity(identity, sysfs_virtual),
+                            'sysfs_virtual': sysfs_virtual,
                             'mode': oct(node.stat().st_mode & 0o777),
                             'readable_now': os.access(node, os.R_OK),
                             'identity': identity, 'steam_holders': [], 'holders': []})
@@ -102,7 +114,7 @@ def isolation_issues(report, single_playstation=False):
     devices = {device['node']: device for device in routes['devices']}
     suppressed = set()
     if single_playstation:
-        sony_id = '0003:0000054C:00000CE6'
+        sony_id = controllers.PLAYSTATION_OUTPUT_ID
         primary_roots = []
         for composite in composites:
             if not composite.get('TargetDevices'):
@@ -110,13 +122,13 @@ def isolation_issues(report, single_playstation=False):
             for source in composite.get('SourceDevicePaths', []):
                 device = devices.get(source, {})
                 if (source.startswith('/dev/hidraw') and not device.get('virtual', True)
-                        and device.get('identity', {}).get('HID_ID') == sony_id):
+                        and controllers.source_identity(device.get('identity', {}))):
                     primary_roots.append(device.get('sysfs', ''))
         if primary_roots:
             virtual_pads = [d for d in devices.values() if d['virtual'] and
                 '/hidraw' in d['node'] and d.get('identity', {}).get('HID_ID') == sony_id]
-            if len(primary_roots) != 1 or len(virtual_pads) != 1:
-                issues.append('Expected one physical-source and one virtual PlayStation output')
+            if len(set(primary_roots)) != len(virtual_pads):
+                issues.append('Expected one virtual PlayStation output per physical controller')
             for composite in composites:
                 sources = composite.get('SourceDevicePaths', [])
                 if not sources or composite.get('TargetDevices'):
@@ -151,7 +163,7 @@ def isolation_issues(report, single_playstation=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-isolation', action='store_true', help='Check necessary preflight conditions; returns 1 when blocked')
-    parser.add_argument('--single-playstation', action='store_true', help='Require one virtual DualSense; allow safely suppressed physical siblings')
+    parser.add_argument('--single-playstation', action='store_true', help='Require one virtual DualSense per physical controller; allow safely suppressed siblings')
     args = parser.parse_args()
     report = {'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
               'routes': device_routes(), 'inputplumber': inputplumber_state()}

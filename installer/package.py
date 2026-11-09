@@ -38,7 +38,7 @@ def inventory(root):
 
 def file_mode(name):
     return 0o755 if name.startswith('scripts/') or name in (
-        'installer/install.sh', 'installer/install.py', 'prototypes/session-overlay.py') else 0o644
+        'installer/install.sh', 'installer/install.py', 'src/session-overlay.py') else 0o644
 
 
 def build(root, output):

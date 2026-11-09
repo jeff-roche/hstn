@@ -7,7 +7,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 class DiagnosticStartupTest(unittest.TestCase):
-    def run_wrapper(self, ready, heroic=False, arm=True, arm_doctor=False):
+    def run_wrapper(self, ready, heroic=False, arm=True, arm_doctor=False, supported=True):
         with tempfile.TemporaryDirectory() as directory:
             home = Path(directory)
             local = home / '.local/bin'
@@ -21,6 +21,7 @@ class DiagnosticStartupTest(unittest.TestCase):
             (local/'wait-controller-isolation.py').write_text(
                 'import os,sys\nwith open(os.environ["LOG"],"a") as f: f.write("check\\ncheck-args "+" ".join(sys.argv[1:])+"\\n")\n'
                 f'raise SystemExit({0 if ready else 1})\n')
+            (local/'supported-controllers.py').write_text('raise SystemExit(' + str(0 if supported else 1) + ')\n')
             marker=home/'.local/state/session-switch/heroic-input-diagnostic.once'
             if heroic:
                 if arm:
@@ -44,10 +45,18 @@ class DiagnosticStartupTest(unittest.TestCase):
             if heroic:self.assertFalse(marker.exists())
             return log.read_text().splitlines()
 
-    def test_failed_preflight_stops_overlay_before_client_starts(self):
+    def test_no_supported_controller_starts_launcher_without_overlay_or_wait(self):
+        for heroic in (False, True):
+            with self.subTest(heroic=heroic):
+                lines = self.run_wrapper(False, heroic=heroic, supported=False)
+                self.assertNotIn('check', lines)
+                self.assertIn('systemctl --user start session-switch-overlay.service', lines)
+                self.assertIn('client', lines)
+
+    def test_failed_preflight_keeps_watcher_until_client_exits(self):
         lines = self.run_wrapper(False)
         self.assertLess(lines.index('check'),lines.index('systemctl --user stop session-switch-overlay.service'))
-        self.assertLess(lines.index('systemctl --user stop session-switch-overlay.service'),lines.index('client'))
+        self.assertLess(lines.index('client'),lines.index('systemctl --user stop session-switch-overlay.service'))
 
     def test_successful_preflight_starts_client_before_cleanup(self):
         lines = self.run_wrapper(True)
@@ -58,9 +67,9 @@ class DiagnosticStartupTest(unittest.TestCase):
         lines = self.run_wrapper(True, heroic=True)
         self.assertLess(lines.index('check'),lines.index('client'))
 
-    def test_failed_heroic_gate_stops_overlay_before_client(self):
+    def test_failed_heroic_gate_keeps_watcher_until_client_exits(self):
         lines = self.run_wrapper(False, heroic=True)
-        self.assertLess(lines.index('systemctl --user stop session-switch-overlay.service'),lines.index('client'))
+        self.assertLess(lines.index('client'),lines.index('systemctl --user stop session-switch-overlay.service'))
 
     def test_heroic_selects_single_playstation_output(self):
         lines=self.run_wrapper(True,heroic=True)
@@ -68,7 +77,7 @@ class DiagnosticStartupTest(unittest.TestCase):
 
     def test_unarmed_heroic_also_requires_isolation(self):
         lines=self.run_wrapper(False,heroic=True,arm=False)
-        self.assertLess(lines.index('systemctl --user stop session-switch-overlay.service'),lines.index('client'))
+        self.assertLess(lines.index('client'),lines.index('systemctl --user stop session-switch-overlay.service'))
         self.assertIn('SESSION_SWITCH_INPUT_TARGET=ds5-single',lines)
 
     def test_steam_requires_one_playstation_output_before_client_starts(self):

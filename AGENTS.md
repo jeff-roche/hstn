@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-HSTN manages Steam, Heroic, and KDE Desktop sessions on Bazzite. `scripts/hstn` is the CLI entry point; `scripts/` contains Python helpers and Bash session wrappers. `tests/` holds automated tests. `templates/config/` contains Gamescope and KWin integration, and `templates/systemd/` contains service units. Artwork lives in `assets/artwork/`, with launcher mappings in `manifest.json`. `installer/install.py` and `installer/install.sh` provide installation entry points; `installer/` defines release assembly.
+HSTN manages Steam, Heroic, and KDE Desktop sessions on Bazzite. `scripts/hstn` is the CLI entry point; `scripts/` contains Python helpers and Bash session wrappers; `src/session-overlay.py` implements the runtime overlay. `tests/` holds automated tests. `templates/config/` contains Gamescope and KWin integration, and `templates/systemd/` contains service units. Artwork lives in `assets/artwork/`, with launcher mappings in `manifest.json`. `installer/install.py` and `installer/install.sh` provide installation entry points; `installer/` defines release assembly.
 
 Read `README.md` for behavior, `installer/INSTALL.md` for deployment, and `docs/DESIGN.md` and `docs/BRANDING.md` for visual and naming guidance. Exclude `docs/superpowers/`, `diagnostics/`, and `prototypes/` from routine exploration and changes.
 

@@ -31,9 +31,18 @@ def correct_rule(text,node):
     return ''.join(lines)
 
 
-def physical_node(node):
-    device=Path('/sys/class/hidraw')/node/'device'
-    return device.exists() and '/devices/virtual/' not in str(device.resolve())
+def physical_node(node, sysfs=Path('/sys')):
+    device = Path(sysfs)/'class/hidraw'/node/'device'
+    if not device.exists():
+        return False
+    if Path(sysfs)/'devices/virtual' not in device.resolve().parents:
+        return True
+    # BlueZ physical Bluetooth sources can live under virtual/misc/uhid.
+    # Keep USB-emulated HSTN outputs excluded. This root helper stays standalone.
+    try:
+        return 'HID_ID=0005:0000054C:00000CE6' in (device/'uevent').read_text().splitlines()
+    except OSError:
+        return False
 
 
 def refresh_nodes(nodes):

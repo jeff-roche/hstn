@@ -53,14 +53,14 @@ with tempfile.NamedTemporaryFile(mode='w',dir=path.parent,delete=False) as strea
 os.replace(pending,path)
 PY
 if ! systemctl --user start session-switch-overlay.service; then
-    echo 'Overlay prototype failed to start; continuing with the session client.' >&2
+    echo 'HSTN overlay failed to start; continuing with the session client.' >&2
 fi
-# Both frontends require physical exclusion and a fully initialized single pad.
+# Connected supported controllers retain startup isolation preflight.
 if [[ "${SESSION_SWITCH_REQUIRE_INPUT_GUARD:-0}" == 1 || "${SESSION_SWITCH_STEAM_DIAGNOSTIC:-0}" == 1 || "$heroic_diagnostic" == 1 || "$(basename -- "$1")" == heroic-gamescope ]]; then
     isolation_args=(--single-playstation)
-    if ! python3 "$HOME/.local/bin/wait-controller-isolation.py" "${isolation_args[@]}"; then
-        echo 'Continuing with launcher only; controller isolation is unavailable.' >&2
-        cleanup
+    # Keep the service watching for hotplug without delaying an empty session.
+    if python3 "$HOME/.local/bin/supported-controllers.py" && ! python3 "$HOME/.local/bin/wait-controller-isolation.py" "${isolation_args[@]}"; then
+        echo 'Controller isolation is not ready; starting launcher while HSTN keeps watching.' >&2
     fi
 fi
 # Collect window evidence for Heroic without changing focus or game settings.

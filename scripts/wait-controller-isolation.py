@@ -9,6 +9,12 @@ import time
 
 
 def main(timeout=60, single_playstation=False):
+    supported_spec = importlib.util.spec_from_file_location('supported_controllers', Path(__file__).resolve().with_name('supported-controllers.py'))
+    controllers = importlib.util.module_from_spec(supported_spec)
+    supported_spec.loader.exec_module(controllers)
+    if not controllers.connected():
+        print('No supported controller connected; skipping isolation.', flush=True)
+        return 1
     status_spec = importlib.util.spec_from_file_location('input_guard_status', Path(__file__).resolve().with_name('input-guard-status.py'))
     status = importlib.util.module_from_spec(status_spec)
     status_spec.loader.exec_module(status)
@@ -23,8 +29,11 @@ def main(timeout=60, single_playstation=False):
     deadline = time.monotonic() + timeout
     stable = 0
     while time.monotonic() < deadline:
+        if not controllers.connected():
+            print('Supported controller disconnected; stopping isolation wait.', flush=True)
+            return 1
         report = {'routes': routes.device_routes(), 'inputplumber': routes.inputplumber_state()}
-        issues = routes.isolation_issues(report, single_playstation=single_playstation)
+        issues = routes.isolation_issues(controllers.isolation_report(report), single_playstation=single_playstation)
         if not guard_active():
             issues.append('Input guard stopped')
         if issues:

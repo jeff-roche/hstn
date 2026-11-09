@@ -2,7 +2,7 @@ import importlib.util
 from pathlib import Path
 from unittest import TestCase, mock
 
-SCRIPT=Path(__file__).resolve().parents[1]/'prototypes/session-overlay.py'
+SCRIPT=Path(__file__).resolve().parents[1]/'src/session-overlay.py'
 spec=importlib.util.spec_from_file_location('overlay_binding',SCRIPT)
 overlay=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(overlay)

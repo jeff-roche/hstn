@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from PySide6 import QtCore
 
-SCRIPT=Path(__file__).resolve().parents[1]/'prototypes/session-overlay.py'
+SCRIPT=Path(__file__).resolve().parents[1]/'src/session-overlay.py'
 spec=importlib.util.spec_from_file_location('switching_overlay',SCRIPT)
 overlay=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(overlay)

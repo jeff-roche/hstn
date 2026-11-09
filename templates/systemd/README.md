@@ -25,10 +25,15 @@ overlapping controller ownership even if the UI crashes. The existing root input
 guard remains required. Desktop startup preserves pre-existing InputPlumber
 owners; keyboard/mouse menu access remains available when controller setup fails.
 The focus bridge loads only HSTN's own scoped KWin script and unloads it on exit.
-Steam and Desktop now use Heroic's existing single-PlayStation coordinator for
-the tested USB DualSense too; only the physical HID source exposes a virtual pad,
-while owned button/motion/touchpad siblings remain suppressed. Steam's preflight
-requires this output to be ready before starting the client.
+The overlay service polls for supported USB and Bluetooth DualSense controllers every 1.5 seconds and stays
+running with none attached. Each physical controller gets one virtual PlayStation
+output; owned button/motion/touchpad siblings remain suppressed. Controllers can
+be connected after login or reconnected without restarting the service. Existing
+Steam physical handles block interception. Connected controllers retain startup
+preflight; an empty session starts its launcher immediately. Mixed USB/Bluetooth multi-controller
+hotplug has automated coverage; live Bluetooth, feedback and suspend/resume
+validation remains necessary. BlueZ/UHID Bluetooth sources are physical inputs
+for isolation purposes; HSTN’s USB-emulated UHID outputs remain excluded.
 
 Inspect with `hstn desktop status` and
 `journalctl --user -u hstn-desktop-overlay.service`. Restart after resolving input

@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 ROOT=Path(__file__).resolve().parents[1]
-spec=importlib.util.spec_from_file_location('guard_overlay',ROOT/'prototypes/session-overlay.py')
+spec=importlib.util.spec_from_file_location('guard_overlay',ROOT/'src/session-overlay.py')
 overlay=importlib.util.module_from_spec(spec);spec.loader.exec_module(overlay)
 
 class GuardLifecycleTest(unittest.TestCase):

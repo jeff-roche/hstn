@@ -24,7 +24,9 @@ After installation, choose whether to configure each detected launcher’s short
 and artwork. Use `sh installer/install.sh -y` to configure all detected launchers
 automatically.
 
-Run from KDE Desktop with Steam, Heroic and games closed. Preview changes first;
+Run from KDE Desktop with games closed. Close Steam and Heroic first, or add `-c`
+to authorize closing running launchers without extra prompts (`-c -y` also accepts
+shortcut configuration). Preview changes first;
 the actual install requests sudo only for the separate system phase. No logout
 or session switch is performed. Public download hosting and native RPM/.deb
 recipes remain release work; the installer is not yet live-validated on a clean host.
@@ -83,21 +85,34 @@ SDDM relogin; it does not guarantee protection through a delayed login that stop
 the entire user manager.
 Steam's built-in power-menu switch bypasses HSTN's transition guard.
 
+The runtime overlay is `src/session-overlay.py`.
+
 The menu uses a temporary, process-specific KWin script to focus the overlay and
 restore the surviving previously active window, including native Wayland apps.
 It does not change KWin shortcuts or persistent scripting settings. The existing
 Gamescope menu and Desktop menu cannot own controller routing simultaneously.
 
-The current controller scope is the tested USB DualSense. Close Steam before
-first enabling Desktop controller management: an already-open physical device
-handle bypasses later permission changes. Once HSTN is ready, Steam can be started
-again using the virtual route. Activation checks known isolation failures; a
-snapshot does not prove live event isolation. Other existing InputPlumber owners
-are preserved. If the guard, controller or route check is unavailable, the menu
-remains accessible through the icon and keyboard/mouse, with an explanation.
-After resolving the cause, restart with
-`systemctl --user restart hstn-desktop-overlay.service`. Additional controllers,
-Bluetooth and general hotplug support remain future work.
+The supported controller model is DualSense over USB or Bluetooth. The overlay service
+checks for supported controllers every 1.5 seconds, including controllers connected
+after login. With none connected, Steam and Heroic start without an isolation wait.
+Each supported controller gets its own virtual PlayStation output; disconnecting
+one removes its input subscriptions while the others continue working. The service
+keeps watching for reconnection. Unsupported devices are excluded from interception.
+Supported source identities are listed in `scripts/supported-controllers.py`.
+Bluetooth sources exposed through BlueZ/UHID are distinguished from HSTN’s virtual
+USB outputs. Pair Bluetooth controllers through KDE’s Bluetooth settings first;
+HSTN handles interception after the connection appears.
+
+Close Steam before first enabling Desktop controller management: an already-open
+physical device handle bypasses later permission changes. HSTN refuses interception
+when Steam already holds the physical controller; reconnect it with Steam closed.
+Once HSTN is ready, Steam can use the virtual route. Other existing InputPlumber
+owners are preserved. If the guard or controller route is unavailable, the Desktop
+menu remains accessible through its icon and keyboard/mouse. Restart the service
+after resolving a guard failure. Mixed USB/Bluetooth controllers and reconnects have automated coverage. Bluetooth
+input, PS+Create, feedback, suspend/resume, and live multi-controller/reboot
+acceptance still require hardware testing. Feedback depends on InputPlumber’s
+transport support.
 
 Setup backs up collisions in the private installation record at
 `$XDG_STATE_HOME/hstn/desktop-install.json` (default `~/.local/state/hstn/`). Repeat
@@ -117,6 +132,7 @@ The project directory is named `hstn`.
 
 ```bash
 hstn doctor
+hstn doctor --verbose
 hstn doctor --json
 ```
 
@@ -127,19 +143,22 @@ input guard/user overlay services. It checks root helper ownership and the
 active guard's PID/start identity. It never repairs files, starts/stops services,
 closes apps or changes sessions. It does not require sudo.
 
+Default output shows warning and failure details plus a summary. Use `-v` or
+`--verbose` to see every check; `--json` always includes complete results.
+
 Reports use PASS, WARN, FAIL and SKIP. Exit status is 1 if any check fails,
-otherwise 0; warnings and skipped checks still need attention. JSON contains
+otherwise 0; warnings still need attention. JSON contains
 `version`, `tool`, `context`, `ok`, `summary`, and a `checks` list whose entries
 have `name`, `status`, and `detail`. Reports include local paths and installation
 details; review them before sharing.
 
-Doctor's overlay checks currently refer to the Gamescope service. On Desktop
-that service is expected to be inactive and live controller isolation is skipped;
-use `hstn desktop status` for the separate Desktop menu.
+Gamescope overlay activity and controller isolation checks appear only inside
+Gamescope. Desktop reports omit these inapplicable runtime checks; use
+`hstn desktop status` for the Desktop menu.
 Inside Gamescope, doctor checks overlay activity and controller route
 prerequisites using the existing read-only inspector (20-second scan timeout).
-Steam, Heroic and Desktop use a single virtual PlayStation output for the tested
-USB DualSense, suppressing duplicate outputs from button/motion/touchpad siblings.
+Steam, Heroic and Desktop use one virtual PlayStation output per supported
+DualSense, suppressing duplicate outputs from button/motion/touchpad siblings.
 This routing is recognized even when a terminal
 does not inherit the overlay service environment. Inspection gaps warn; known
 isolation failures fail. A passing snapshot is not a live controller-input test.

@@ -9,6 +9,8 @@ import io
 import json
 import os
 import platform
+import signal
+import time
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,12 +23,12 @@ USER_UNITS = ('hstn-desktop-overlay.service', 'session-switch-overlay.service')
 LINKS = {
     'hstn': 'scripts/hstn', 'session-switch': 'scripts/session-switch',
     'session-close': 'scripts/session-close.py', 'session-game-activity': 'scripts/game-activity.py',
-    'session-overlay-prototype': 'prototypes/session-overlay.py',
+    'hstn-overlay': 'src/session-overlay.py',
     **{name: 'scripts/' + name for name in (
         'switch-to-steam', 'switch-to-heroic', 'switch-to-desktop', 'heroic-gamescope',
         'gamescope-client-with-overlay', 'steam-session-with-overlay', 'heroic-session-with-overlay',
         'wait-controller-isolation.py', 'input-guard-status.py', 'controller-route-snapshot.py',
-        'playstation-output.py', 'heroic-window-focus.py', 'session-transition-guard.py',
+        'playstation-output.py', 'supported-controllers.py', 'heroic-window-focus.py', 'session-transition-guard.py',
         'capture-doctor.py', 'collect-controller-routes.py', 'collect-gamescope-windows.py')},
 }
 
@@ -207,20 +209,83 @@ def run(args, check=True, timeout=30):
     return result
 
 
-def desktop_idle():
+def running_launchers():
+    config = load('configure-launchers')
+    return [name for name, check in (('Steam', config.steam_running), ('Heroic', config.heroic_running))
+            if check()]
+
+
+def desktop_idle(check_launchers=True):
     errors = []
     if 'KDE' not in os.environ.get('XDG_CURRENT_DESKTOP', ''):
         errors.append('Run installation/removal from KDE Desktop Mode')
     desktop = load('desktop-integration')
     if desktop.gamescope_active():
         errors.append('An active Gamescope session prevents installation/removal')
-    config = load('configure-launchers')
-    if config.steam_running() or config.heroic_running():
-        errors.append('Close Steam and Heroic before installation/removal')
+    running = running_launchers() if check_launchers else []
+    if running:
+        errors.append('Close these running launchers before installation/removal: ' + ', '.join(running))
     result = run([sys.executable, '-B', ROOT/'scripts/game-activity.py', '--check'], check=False)
     if result.returncode:
         errors.append('Games must be closed and the activity check must succeed: ' + (result.stdout or result.stderr).strip())
     return errors
+
+
+def request_heroic_close(proc=Path('/proc')):
+    """Send SIGTERM only to this user's Heroic main processes, through pidfds."""
+    for process in Path(proc).glob('[0-9]*'):
+        try:
+            if process.stat().st_uid != os.getuid() or (process/'comm').read_text().strip().lower() != 'heroic':
+                continue
+            args = (process/'cmdline').read_bytes().split(b'\0')
+            if any(arg == b'--type' or arg.startswith(b'--type=') for arg in args):
+                continue  # Electron renderer/GPU children exit with their parent.
+            started = (process/'stat').read_text().rsplit(') ', 1)[1].split()[19]
+            fd = os.pidfd_open(int(process.name))
+            try:
+                if (process/'stat').read_text().rsplit(') ', 1)[1].split()[19] != started:
+                    continue
+                signal.pidfd_send_signal(fd, signal.SIGTERM)
+            finally:
+                os.close(fd)
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+
+
+def close_running_launchers(timeout=30):
+    errors = desktop_idle(check_launchers=False)
+    if errors:
+        raise RuntimeError('Cannot close launchers:\n- ' + '\n- '.join(errors))
+    running = running_launchers()
+    if not running:
+        return
+    print('Closing running launchers: ' + ', '.join(running))
+    for launcher in running:
+        # A game may have started since the initial check. Never terminate games.
+        errors = desktop_idle(check_launchers=False)
+        if errors:
+            raise RuntimeError('Cannot close launchers:\n- ' + '\n- '.join(errors))
+        if launcher not in running_launchers():
+            continue
+        try:
+            if launcher == 'Steam':
+                command = ['steam', '-shutdown'] if shutil.which('steam') else [
+                    'flatpak', 'run', 'com.valvesoftware.Steam', '-shutdown']
+                result = run(command, check=False, timeout=20)
+                if result.returncode:
+                    print('Steam shutdown request: ' + (result.stderr or result.stdout).strip())
+            else:
+                request_heroic_close()
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+            print(f'Could not request {launcher} shutdown: {error}', file=sys.stderr)
+    deadline = time.monotonic() + timeout
+    remaining = running_launchers()
+    while remaining and time.monotonic() < deadline:
+        time.sleep(0.5)
+        remaining = running_launchers()
+    if remaining:
+        raise RuntimeError('Close these launchers manually, then retry: ' + ', '.join(remaining))
+    print('Launchers closed. Continuing installation/removal.')
 
 
 def selected_configs(options):
@@ -418,6 +483,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', nargs='?', default='install', choices=('install', 'setup', 'uninstall', 'status'))
     parser.add_argument('--dry-run', action='store_true')
+    parser.add_argument('-c', '--close-launchers', action='store_true',
+                        help='Authorize closing running launchers before installation/removal (no extra prompts)')
     parser.add_argument('--status', action='store_true', help='Read installation state without changing anything')
     parser.add_argument('--user-only', action='store_true', help='Explicitly skip the system phase (reports incomplete prerequisites)')
     parser.add_argument('--clean-slate', action='store_true', help='Uninstall recognized pre-installer HSTN pieces as well (preserves source and unrelated games)')
@@ -461,6 +528,8 @@ def main(argv=None):
             raise RuntimeError('hstn setup is for native packages; use hstn install for standalone installation')
         if args.action == 'install' and package:
             raise RuntimeError('This is a native package; use hstn setup and the package manager for upgrades')
+        if args.close_launchers and not args.dry_run:
+            close_running_launchers()
         if args.action == 'uninstall':
             errors = desktop_idle()
             plan = {}

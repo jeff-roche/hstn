@@ -85,3 +85,44 @@ class IsolationTest(unittest.TestCase):
         with mock.patch.object(routes,'device_routes',return_value=report['routes']),mock.patch.object(routes,'inputplumber_state',return_value=report['inputplumber']),mock.patch('sys.argv',['routes','--check-isolation','--single-playstation']),contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(routes.main(),0)
             self.assertIn('"isolation_issues": []',output.getvalue())
+
+    def test_multiple_controllers_require_one_output_each(self):
+        report = self.playstation_report()
+        physical = dict(report['routes']['devices'][0], node='/dev/hidraw2', sysfs='/sys/devices/pci/second')
+        virtual = dict(report['routes']['devices'][1], node='/dev/hidraw15', sysfs='/sys/devices/virtual/misc/uhid/second')
+        report['routes']['devices'].extend([physical, virtual])
+        report['inputplumber']['composites'].append({
+            'path': '/second', 'SourceDevicePaths': ['/dev/hidraw2'], 'InterceptMode': 1,
+            'DbusDevices': ['/target/dbus2'], 'TargetDevices': ['/target/gamepad2']})
+        self.assertEqual(routes.isolation_issues(report, single_playstation=True), [])
+        report['routes']['devices'].remove(virtual)
+        self.assertTrue(routes.isolation_issues(report, single_playstation=True))
+
+    def test_bluetooth_source_and_siblings_cannot_bypass_isolation(self):
+        report = self.playstation_report()
+        root = '/sys/devices/virtual/misc/uhid/bluetooth'
+        source = report['routes']['devices'][0]
+        source.update(sysfs=root, sysfs_virtual=True, identity={'HID_ID': '0005:0000054C:00000CE6'})
+        report['routes']['devices'][2].update(sysfs=root+'/input/input36', sysfs_virtual=True)
+        self.assertEqual(routes.isolation_issues(report, single_playstation=True), [])
+        source['readable_now'] = True
+        self.assertTrue(any('Physical source remains readable' in issue
+                            for issue in routes.isolation_issues(report, single_playstation=True)))
+        source['readable_now'] = False
+        source['steam_holders'] = [{'pid': 42, 'fd': '5'}]
+        self.assertTrue(any('Steam already holds' in issue
+                            for issue in routes.isolation_issues(report, single_playstation=True)))
+
+    def test_mixed_usb_and_bluetooth_controllers_need_independent_outputs(self):
+        report = self.playstation_report()
+        bluetooth = dict(report['routes']['devices'][0], node='/dev/hidraw3',
+                         sysfs='/sys/devices/virtual/misc/uhid/bluetooth', sysfs_virtual=True,
+                         identity={'HID_ID': '0005:0000054C:00000CE6'})
+        output = dict(report['routes']['devices'][1], node='/dev/hidraw16')
+        report['routes']['devices'].extend([bluetooth, output])
+        report['inputplumber']['composites'].append({
+            'path': '/bluetooth', 'SourceDevicePaths': ['/dev/hidraw3'], 'InterceptMode': 1,
+            'DbusDevices': ['/target/dbus3'], 'TargetDevices': ['/target/gamepad3']})
+        self.assertEqual(routes.isolation_issues(report, single_playstation=True), [])
+        report['routes']['devices'].remove(output)
+        self.assertTrue(routes.isolation_issues(report, single_playstation=True))

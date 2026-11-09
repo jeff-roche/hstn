@@ -9,7 +9,7 @@ class ConfirmationUiTest(unittest.TestCase):
 import importlib.util,json,os,tempfile
 from pathlib import Path
 from unittest import mock
-spec=importlib.util.spec_from_file_location('overlay',Path('prototypes/session-overlay.py').resolve());m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+spec=importlib.util.spec_from_file_location('overlay',Path('src/session-overlay.py').resolve());m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 os.environ['QT_QPA_PLATFORM']='offscreen';m.xproperty=lambda *args:None
 app=m.QtWidgets.QApplication([])
 with tempfile.TemporaryDirectory() as directory:

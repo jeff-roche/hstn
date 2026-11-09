@@ -187,6 +187,107 @@ class InstallerTest(unittest.TestCase):
         self.m.apply_user(self.source, self.locations, self.m.user_files(self.source, self.locations))
         self.assertEqual(retired.read_text(), 'original collision')
 
+    def test_close_flag_closes_only_detected_launchers_without_prompting(self):
+        with patch.object(self.m, 'desktop_idle', return_value=[]), \
+             patch.object(self.m, 'running_launchers', side_effect=[['Steam', 'Heroic'], ['Steam', 'Heroic'], ['Heroic'], []]), \
+             patch.object(self.m.shutil, 'which', return_value='/usr/bin/steam'), \
+             patch.object(self.m, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as command, \
+             patch.object(self.m, 'request_heroic_close') as heroic, patch('builtins.input') as prompt:
+            self.m.close_running_launchers()
+        command.assert_called_once_with(['steam', '-shutdown'], check=False, timeout=20)
+        heroic.assert_called_once()
+        prompt.assert_not_called()
+
+    def test_close_flag_does_not_close_launchers_when_game_or_session_blocks(self):
+        for error in ('Games must be closed', 'An active Gamescope session prevents installation/removal'):
+            with self.subTest(error=error), patch.object(self.m, 'desktop_idle', return_value=[error]), \
+                 patch.object(self.m, 'run') as command, patch.object(self.m, 'request_heroic_close') as heroic:
+                with self.assertRaisesRegex(RuntimeError, error):
+                    self.m.close_running_launchers()
+                command.assert_not_called()
+                heroic.assert_not_called()
+
+    def test_close_flag_rechecks_games_before_each_launcher(self):
+        with patch.object(self.m, 'desktop_idle', side_effect=[[], ['Games must be closed']]), \
+             patch.object(self.m, 'running_launchers', return_value=['Steam']), \
+             patch.object(self.m, 'run') as command:
+            with self.assertRaisesRegex(RuntimeError, 'Games must be closed'):
+                self.m.close_running_launchers()
+            command.assert_not_called()
+
+    def test_close_flag_reports_launchers_that_do_not_exit(self):
+        with patch.object(self.m, 'desktop_idle', return_value=[]), \
+             patch.object(self.m, 'running_launchers', return_value=['Heroic']), \
+             patch.object(self.m, 'request_heroic_close') as heroic:
+            with self.assertRaisesRegex(RuntimeError, 'Close these launchers manually, then retry: Heroic'):
+                self.m.close_running_launchers(timeout=0)
+            heroic.assert_called_once()
+
+    def test_close_flag_handles_flatpak_only_steam(self):
+        with patch.object(self.m, 'desktop_idle', return_value=[]), \
+             patch.object(self.m, 'running_launchers', side_effect=[['Steam'], ['Steam'], []]), \
+             patch.object(self.m.shutil, 'which', return_value=None), \
+             patch.object(self.m, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')) as command:
+            self.m.close_running_launchers()
+        command.assert_called_once_with(['flatpak', 'run', 'com.valvesoftware.Steam', '-shutdown'], check=False, timeout=20)
+
+    def test_heroic_close_targets_main_process_and_preserves_renderers_and_other_apps(self):
+        proc = self.home/'proc'
+        proc.mkdir()
+        for pid, name, args in ((100, 'heroic', b'/app/heroic\0'),
+                                (101, 'heroic', b'/app/heroic\0--type=renderer\0'),
+                                (102, 'game', b'/game\0')):
+            process = proc/str(pid)
+            process.mkdir()
+            (process/'comm').write_text(name)
+            (process/'cmdline').write_bytes(args)
+            (process/'stat').write_text(str(pid) + ' (' + name + ') S ' + '0 '*18 + '123')
+        with patch.object(self.m.os, 'pidfd_open', return_value=9) as open_pid, \
+             patch.object(self.m.signal, 'pidfd_send_signal') as terminate, \
+             patch.object(self.m.os, 'close') as close:
+            self.m.request_heroic_close(proc)
+        open_pid.assert_called_once_with(100)
+        terminate.assert_called_once_with(9, self.m.signal.SIGTERM)
+        close.assert_called_once_with(9)
+
+    def test_heroic_close_rejects_reused_pid(self):
+        proc = self.home/'proc'
+        process = proc/'100'
+        process.mkdir(parents=True)
+        (process/'comm').write_text('heroic')
+        (process/'cmdline').write_bytes(b'/app/heroic\0')
+        prefix = '100 (heroic) S ' + '0 '*18
+        (process/'stat').write_text(prefix + '123')
+        def reopen(pid):
+            (process/'stat').write_text(prefix + '456')
+            return 9
+        with patch.object(self.m.os, 'pidfd_open', side_effect=reopen), \
+             patch.object(self.m.signal, 'pidfd_send_signal') as terminate, \
+             patch.object(self.m.os, 'close') as close:
+            self.m.request_heroic_close(proc)
+        terminate.assert_not_called()
+        close.assert_called_once_with(9)
+
+    def test_preflight_lists_only_launchers_that_are_running(self):
+        config = load('configure-launchers')
+        desktop = load('desktop-integration')
+        for steam, heroic, expected in ((True, False, 'Steam'), (False, True, 'Heroic'),
+                                        (True, True, 'Steam, Heroic'), (False, False, None)):
+            with self.subTest(steam=steam, heroic=heroic), \
+                 patch.dict(os.environ, {'XDG_CURRENT_DESKTOP': 'KDE'}), \
+                 patch.object(self.m, 'load', side_effect=lambda name: desktop if name == 'desktop-integration' else config), \
+                 patch.object(desktop, 'gamescope_active', return_value=False), \
+                 patch.object(config, 'steam_running', return_value=steam) as check_steam, \
+                 patch.object(config, 'heroic_running', return_value=heroic) as check_heroic, \
+                 patch.object(self.m, 'run', return_value=subprocess.CompletedProcess([], 0, '', '')):
+                errors = self.m.desktop_idle()
+                check_steam.assert_called_once()
+                check_heroic.assert_called_once()
+                if expected:
+                    self.assertEqual(errors, ['Close these running launchers before installation/removal: ' + expected])
+                else:
+                    self.assertEqual(errors, [])
+
     def test_ambiguous_configurations_require_explicit_selection(self):
         config = load('configure-launchers')
         original_load = self.m.load
@@ -291,13 +392,20 @@ class InstallerTest(unittest.TestCase):
         with patch.object(self.m, 'ROOT', self.source), patch.object(self.m.Path, 'home', return_value=self.home), \
              patch.dict(os.environ, self.env), patch.object(self.m.os, 'geteuid', return_value=1000), \
              patch.object(self.m, 'run', side_effect=command), patch.object(self.m, 'preflight', return_value=[]), \
-             patch.object(self.m, 'desktop_idle', return_value=[]), patch.object(self.m, 'confirm_launcher', return_value=False), patch.object(doctor, 'permission_check', return_value=('PASS', 'allowed')), \
+             patch.object(self.m, 'desktop_idle', return_value=[]), patch.object(self.m, 'close_running_launchers') as close_launchers, patch.object(self.m, 'confirm_launcher', return_value=False), patch.object(doctor, 'permission_check', return_value=('PASS', 'allowed')), \
              patch.object(self.m, 'load', side_effect=lambda name, *a: doctor if name == 'doctor' else original_load(name, *a)):
-            options = ['--user-only', '--steam-config-dir', str(steam), '--heroic-config-dir', str(heroic)]
+            options = ['-c', '--user-only', '--steam-config-dir', str(steam), '--heroic-config-dir', str(heroic)]
             self.assertEqual(self.m.main(options), 0)
             self.assertTrue(active)
+            self.assertEqual(close_launchers.call_count, 1)
+            self.assertEqual(self.m.main([*options, '--dry-run']), 0)
+            self.assertEqual(close_launchers.call_count, 1)
             self.assertEqual(self.m.main(options), 0)
-            self.assertEqual(self.m.main(['--status']), 0)
+            self.assertEqual(close_launchers.call_count, 2)
+            self.assertEqual(self.m.main([*options[1:], '-y']), 0)
+            self.assertEqual(close_launchers.call_count, 2)
+            self.assertEqual(self.m.main(['--status', '-c']), 0)
+            self.assertEqual(close_launchers.call_count, 2)
             self.assertEqual(self.m.main(['uninstall', '--user-only']), 0)
         self.assertFalse((self.locations.bin/'hstn').exists())
         self.assertFalse(active)

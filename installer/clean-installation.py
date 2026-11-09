@@ -111,7 +111,7 @@ def user_files(locations, samples, legacy=False, handled=None, originals=None):
                 value = path.read_bytes()
                 if normalized_unit(value) != normalized_unit(sample):
                     # Generated Desktop unit has a runtime path and XDG lines.
-                    if name != 'hstn-desktop-overlay.service' or b'org.hstn.DesktopOverlay' not in value or b'/prototypes/session-overlay.py" --desktop' not in value:
+                    if name != 'hstn-desktop-overlay.service' or b'org.hstn.DesktopOverlay' not in value or not any(marker in value for marker in (b'/prototypes/session-overlay.py" --desktop', b'/src/session-overlay.py" --desktop')):
                         if unrecognized(path, 'user unit'): continue
                 files[path] = None
             for backup in path.parent.glob(name + '.bak*'):

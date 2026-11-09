@@ -110,6 +110,8 @@ class PlayStationOutputTest(unittest.TestCase):
             failed=root/'0003:054C:0CE6.0001';failed.mkdir()
             (failed/'uevent').write_text('HID_ID=0003:0000054C:00000CE6\n')
             unrelated=root/'other';unrelated.mkdir();(unrelated/'uevent').write_text('HID_ID=other\n')
+            bluetooth=root/'bluetooth-source';bluetooth.mkdir()
+            (bluetooth/'uevent').write_text('HID_ID=0005:0000054C:00000CE6\n')
             self.assertEqual(m.virtual_devices(root),[str(failed)])
 
     def test_waits_for_initial_target_creation_before_requesting_drain(self):
@@ -152,3 +154,116 @@ class PlayStationOutputTest(unittest.TestCase):
         self.assertEqual(c.phase,'failed');count=len(calls)
         with self.assertRaises(RuntimeError):c.update(records)
         self.assertEqual(len(calls),count)
+
+
+class MultiplePlayStationOutputsTest(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('multi_output_test', SCRIPT)
+        self.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.module)
+        self.records = []
+        self.nodes = set()
+        self.calls = []
+        self.parents = {}
+
+        def set_targets(path, targets):
+            self.calls.append((path, targets))
+            parent = next(self.parents[source] for record in self.records
+                          if record['path'] == path for source in record['sources'])
+            self.nodes.discard(parent + '-default')
+            self.nodes.discard(parent + '-virtual')
+            for record in self.records:
+                if record['path'] == path:
+                    record['targets'] = [] if targets == ['null'] else [path + '/output']
+            if targets != ['null']:
+                self.nodes.add(parent + '-virtual')
+
+        self.manager = self.module.PlayStationOutputs(
+            set_targets, parent_for=self.parents.get,
+            required_for=lambda source: {source}, virtual_devices=lambda: set(self.nodes),
+            device_ready=lambda node: node in self.nodes)
+
+    def add_controller(self, number):
+        source = '/dev/hidraw' + str(number)
+        parent = 'physical' + str(number)
+        self.parents[source] = parent
+        self.records.append({'path': '/controller' + str(number), 'sources': [source],
+                             'owned': True, 'targets': ['/default']})
+        self.nodes.add(parent + '-default')
+
+    def settle(self):
+        for _ in range(10):
+            if self.manager.update(self.records):
+                return
+        self.fail('Controllers did not become ready')
+
+    def test_two_controllers_get_separate_outputs(self):
+        self.add_controller(1)
+        self.add_controller(2)
+        self.settle()
+        self.assertEqual(self.manager.ready_paths, {'/controller1', '/controller2'})
+        self.assertEqual(self.nodes, {'physical1-virtual', 'physical2-virtual'})
+        self.assertEqual([path for path, targets in self.calls if targets == ['ds5', 'mouse', 'keyboard']],
+                         ['/controller1', '/controller2'])
+
+    def test_hotplug_second_controller_preserves_first_output(self):
+        self.add_controller(1)
+        self.settle()
+        first_calls = list(self.calls)
+        self.add_controller(2)
+        self.manager.update(self.records)
+        self.assertIn('/controller1', self.manager.ready_paths)
+        self.settle()
+        self.assertEqual([call for call in self.calls if call[0] == '/controller1'], first_calls)
+
+    def test_unplug_one_and_reconnect_does_not_reset_other(self):
+        self.add_controller(1)
+        self.add_controller(2)
+        self.settle()
+        calls = list(self.calls)
+        self.records = [record for record in self.records if record['path'] != '/controller1']
+        self.nodes.discard('physical1-virtual')
+        self.manager.update(self.records)
+        self.assertEqual(self.manager.ready_paths, {'/controller2'})
+        self.assertEqual(self.calls, calls)
+        self.add_controller(1)
+        self.settle()
+        self.assertEqual([call for call in self.calls if call[0] == '/controller2'],
+                         [call for call in calls if call[0] == '/controller2'])
+
+    def test_foreign_controller_is_preserved_while_other_becomes_ready(self):
+        self.add_controller(1)
+        self.add_controller(2)
+        self.records[1]['owned'] = False
+        # Existing owner's virtual device remains outside our inventory.
+        self.nodes.discard('physical2-default')
+        for _ in range(5):
+            self.manager.update(self.records)
+        self.assertEqual(self.manager.ready_paths, {'/controller1'})
+        self.assertTrue(self.manager.failures)
+        self.assertFalse(any(path == '/controller2' for path, targets in self.calls))
+
+    def test_partial_discovery_waits_for_physical_hid_before_interception(self):
+        self.parents['/dev/input/event1'] = 'physical1'
+        self.records.append({'path': '/buttons', 'sources': ['/dev/input/event1'],
+                             'owned': True, 'targets': ['/default']})
+        self.assertFalse(self.manager.update(self.records))
+        self.assertFalse(self.manager.ready_paths)
+        self.assertFalse(self.calls)
+
+    def test_usb_to_bluetooth_switch_preserves_other_controller(self):
+        self.add_controller(1)
+        self.add_controller(2)
+        self.settle()
+        other_calls = [call for call in self.calls if call[0] == '/controller2']
+        self.records = [record for record in self.records if record['path'] != '/controller1']
+        self.nodes.discard('physical1-virtual')
+        self.manager.update(self.records)
+        self.parents['/dev/hidraw3'] = 'bluetooth1'
+        self.records.append({'path': '/bluetooth1', 'sources': ['/dev/hidraw3'],
+                             'owned': True, 'targets': ['/default']})
+        self.nodes.add('bluetooth1-default')
+        self.settle()
+        self.assertEqual(self.manager.ready_paths, {'/controller2', '/bluetooth1'})
+        self.assertNotIn('physical1', self.manager.controllers)
+        self.assertEqual([call for call in self.calls if call[0] == '/controller2'], other_calls)

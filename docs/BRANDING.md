@@ -19,7 +19,7 @@ No force option is provided. See [installation guidance](../installer/INSTALL.md
 Keep these identifiers until an explicit migration is implemented and tested:
 
 - `session-switch`, `session-close`, `session-game-activity`,
-  `session-overlay-prototype`, and `switch-to-*` installed entry points.
+  `hstn-overlay`, and `switch-to-*` installed entry points.
 - `session-switch-overlay.service`, `session-switch-input-guard.service`,
   their environment files, runtime paths, status kind, rollback journal and lock.
 - `SESSION_SWITCH_*` environment variables and existing diagnostic marker paths.

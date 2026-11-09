@@ -41,9 +41,9 @@ class BootstrapTest(unittest.TestCase):
     def test_verified_offline_archive_forwards_arguments_with_spaces(self):
         archive, digest = self.archive()
         result = self.execute('--archive', str(archive), '--sha256', digest,
-                              '-y', '--dry-run', '--steam-config-dir', '/a space/config')
+                              '-y', '-c', '--dry-run', '--steam-config-dir', '/a space/config')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(self.marker.read_text(), '-y --dry-run --steam-config-dir /a space/config')
+        self.assertEqual(self.marker.read_text(), '-y -c --dry-run --steam-config-dir /a space/config')
 
     def test_checksum_failure_never_executes_payload(self):
         archive, digest = self.archive()

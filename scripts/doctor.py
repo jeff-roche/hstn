@@ -77,12 +77,10 @@ def collect():
         except Exception as error:
             status, detail = 'FAIL', f'Could not inspect: {type(error).__name__}: {error}'
         add(name, status, detail)
-    def service(unit, user=False, inactive_ok=False):
+    def service(unit, user=False):
         code, output = probe(['systemctl', *(['--user'] if user else []), 'is-active', unit])
         if code == 0 and output == 'active':
             return 'PASS', f'{unit}: active'
-        if inactive_ok and output == 'inactive':
-            return 'SKIP', f'{unit}: inactive on Desktop (expected)'
         return 'FAIL', f'{unit}: {output or "unavailable"}'
 
     for tool in ('bash', 'python3', 'busctl', 'systemctl', 'systemd-run', 'systemd-inhibit', 'flatpak',
@@ -105,7 +103,7 @@ def collect():
 
     home = Path.home()
     executable = ('hstn', 'session-switch', 'session-close', 'session-game-activity',
-                  'session-overlay-prototype', 'switch-to-steam', 'switch-to-heroic',
+                  'hstn-overlay', 'switch-to-steam', 'switch-to-heroic',
                   'switch-to-desktop', 'gamescope-client-with-overlay',
                   'heroic-session-with-overlay', 'steam-session-with-overlay', 'heroic-gamescope')
     for name in executable:
@@ -115,7 +113,8 @@ def collect():
         check(f'helper:{name}', lambda name=name: file_check(home/'.local/bin'/name))
     config_home = Path(os.environ.get('XDG_CONFIG_HOME', home/'.config'))
     check('overlay:unit', lambda: file_check(config_home/'systemd/user/session-switch-overlay.service'))
-    check('overlay:state', lambda: service('session-switch-overlay.service', user=True, inactive_ok=not in_gamescope()))
+    if in_gamescope():
+        check('overlay:state', lambda: service('session-switch-overlay.service', user=True))
     for name in ('heroic', 'steam', 'ogui-steam'):
         installed = config_home/'gamescope-session-plus/sessions.d'/name
         def session_config(path=installed, name=name):
@@ -140,8 +139,6 @@ def collect():
 
     if in_gamescope():
         check('controller:isolation', lambda: routing_check())
-    else:
-        add('controller:isolation', 'SKIP', 'Run inside the active Gamescope session to inspect managed routes; Desktop cannot establish game-input isolation')
     return checks
 
 
@@ -270,7 +267,8 @@ print(json.dumps({'issues':m.isolation_issues(r,single_playstation=sys.argv[2]==
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--json', action='store_true', help='Print a structured report')
+    parser.add_argument('--json', action='store_true', help='Print a complete structured report')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Show all checks, including passes')
     args = parser.parse_args(argv)
     checks = collect()
     summary = {status: sum(c['status'] == status for c in checks) for status in ('PASS', 'WARN', 'FAIL', 'SKIP')}
@@ -281,9 +279,10 @@ def main(argv=None):
     else:
         print(f'HSTN doctor — {report["context"]} (read-only)')
         for item in checks:
-            print(f'[{item["status"]}] {item["name"]}: {item["detail"]}')
-        print('\n' + ' · '.join(f'{count} {status.lower()}' for status, count in summary.items()))
-        print('No changes made. Warnings/skips do not establish that every runtime feature works.')
+            if args.verbose or item['status'] in ('WARN', 'FAIL'):
+                print(f'[{item["status"]}] {item["name"]}: {item["detail"]}')
+        print('\n' + ' · '.join(f'{count} {status.lower()}' for status, count in summary.items() if status != 'SKIP' or count))
+        print('No changes made.')
     return int(not report['ok'])
 
 

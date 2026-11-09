@@ -81,3 +81,32 @@ class GuardTest(unittest.TestCase):
                 with mock.patch.dict(os.environ,{'NOTIFY_SOCKET':path}):
                     self.assertTrue(load().notify('READY=1'))
                 self.assertEqual(receiver.recv(128),b'READY=1')
+
+    def test_bluetooth_uhid_sources_are_corrected_but_virtual_usb_outputs_are_not(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            module = load()
+            for number, identity, expected in (
+                (1, '0005:0000054C:00000CE6', True),
+                (2, '0003:0000054C:00000CE6', False),
+                (3, '0005:0000045E:000002EA', False),
+            ):
+                device = root/'devices/virtual/misc/uhid'/str(number)
+                device.mkdir(parents=True)
+                (device/'uevent').write_text('HID_ID=' + identity + '\n')
+                link = root/'class/hidraw'/f'hidraw{number}'/'device'
+                link.parent.mkdir(parents=True)
+                link.symlink_to(device)
+                self.assertEqual(module.physical_node(f'hidraw{number}', root), expected)
+
+    def test_bluetooth_rule_correction_and_restore(self):
+        with tempfile.TemporaryDirectory() as folder:
+            guard, rules, state, refresh = self.fixture(folder)
+            text = TEXT.replace('0003:054C:0CE6.000D', '0005:054C:0CE6.000D')
+            path = rules/RULE
+            path.write_text(text)
+            guard.scan_once()
+            self.assertIn('SUBSYSTEM=="hidraw"', path.read_text())
+            self.assertEqual(refresh, [{'hidraw1'}])
+            guard.restore()
+            self.assertEqual(path.read_text(), text)

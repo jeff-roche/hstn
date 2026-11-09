@@ -1,10 +1,12 @@
 # Installing HSTN
 
 HSTN currently targets **Bazzite KDE with Steam, Heroic Flatpak, Gamescope
-session-plus and the tested USB DualSense**. An installer does not establish
-support for other distributions/controllers. Install, upgrade and remove from KDE
-Desktop with Steam, Heroic and games closed. Installation never logs out, closes
-apps, restarts SDDM, reboots or changes your persistent autologin destination.
+session-plus and DualSense over USB or Bluetooth**. USB has prior live testing;
+Bluetooth routing and reconnection have automated coverage and need live
+acceptance. An installer does not establish support for other distributions/controllers. Install, upgrade and remove from KDE
+Desktop with games closed. Close Steam and Heroic first, or use `-c` to authorize
+closing running launchers. Installation never logs out, restarts SDDM, reboots or
+changes your persistent autologin destination.
 
 ## From an extracted release or source tree
 
@@ -13,6 +15,17 @@ Requires Python 3.10+. Preview first:
 ```sh
 sh installer/install.sh --dry-run
 sh installer/install.sh
+```
+
+Add `-c` (or `--close-launchers`) to authorize closing detected running launchers
+without extra prompts. Steam receives `-shutdown`; Heroic main processes receive
+SIGTERM. The installer waits for exit and reports any launchers that still need
+manual closing. It refuses while games are active and never escalates to SIGKILL.
+`--dry-run` and status checks never close launchers. `-y` only accepts shortcut
+configuration; combine the flags to authorize both actions:
+
+```sh
+sh installer/install.sh -c -y
 ```
 
 The normal invocation installs the runtime, commands, session definitions,
@@ -160,11 +173,15 @@ apt/dnf, layer packages, download launchers or change OS images.
 
 After file/service installation, doctor failures mean setup is incomplete, even
 though recoverable installed files may remain. WARN/SKIP do not establish live
-controller isolation. In particular, Desktop skips live Gamescope routing checks.
+controller isolation. Desktop reports omit the Gamescope-only runtime checks.
 Perform Steam and Heroic round trips, repeated restarts, PS/PS+Create, glyphs,
 guarded close-and-switch and reboot acceptance manually. Diagnostic captures are
-included but never armed by installation. Bluetooth/multiple controllers/general
-hotplug and Steam's built-in power-menu lid-guard coverage remain unvalidated.
+included but never armed by installation. The service watches for supported USB
+and Bluetooth controllers and maintains separate virtual outputs for multiple controllers.
+Multiple-controller hotplug has automated coverage; live hardware acceptance,
+Bluetooth feedback/suspend/resume, and Steam's built-in power-menu lid-guard
+coverage remain unvalidated. Pair Bluetooth devices through KDE before use;
+the installer does not configure Bluetooth adapters or pairing.
 
 ## Building releases and native packages
 

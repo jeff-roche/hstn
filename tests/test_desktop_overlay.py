@@ -17,7 +17,7 @@ def load(name, path):
 
 class DesktopOverlayTest(unittest.TestCase):
     def test_desktop_switch_preserves_session_environment(self):
-        overlay = load('desktop_switch_overlay', ROOT/'prototypes/session-overlay.py')
+        overlay = load('desktop_switch_overlay', ROOT/'src/session-overlay.py')
         with mock.patch.dict(os.environ, {'SESSION_SWITCH_DESKTOP_MODE':'1', 'XDG_CURRENT_DESKTOP':'KDE', 'XDG_SESSION_TYPE':'wayland', 'WAYLAND_DISPLAY':'wayland-1'}):
             args = overlay.switch_command('/tmp/helper', 'steam')
         self.assertIn('--setenv=XDG_CURRENT_DESKTOP=KDE', args)
@@ -43,7 +43,7 @@ class DesktopOverlayTest(unittest.TestCase):
 import importlib.util,os
 from pathlib import Path
 from unittest import mock
-spec=importlib.util.spec_from_file_location('overlay',Path('prototypes/session-overlay.py').resolve())
+spec=importlib.util.spec_from_file_location('overlay',Path('src/session-overlay.py').resolve())
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 os.environ['QT_QPA_PLATFORM']='offscreen'
 app=m.QtWidgets.QApplication([])
@@ -100,7 +100,7 @@ if(workspace.activeWindow!==previous)throw Error('Activated foreign window');
         self.assertEqual(result.returncode,0,result.stderr)
 
     def test_desktop_capture_checks_existing_steam_routes(self):
-        overlay=load('desktop_route_overlay', ROOT/'prototypes/session-overlay.py')
+        overlay=load('desktop_route_overlay', ROOT/'src/session-overlay.py')
         app=overlay.QtCore.QCoreApplication.instance() or overlay.QtCore.QCoreApplication([])
         with mock.patch.dict(os.environ, {'SESSION_SWITCH_DESKTOP_MODE':'1'}):
             router=overlay.InputRouter()
@@ -110,13 +110,13 @@ if(workspace.activeWindow!==previous)throw Error('Activated foreign window');
                 inspect.assert_called_once();mutate.assert_not_called()
 
     def test_desktop_single_output_preflight_accepts_suppressed_siblings(self):
-        overlay=load('desktop_single_output_check',ROOT/'prototypes/session-overlay.py')
+        overlay=load('desktop_single_output_check',ROOT/'src/session-overlay.py')
         with mock.patch.dict(os.environ,{'SESSION_SWITCH_INPUT_TARGET':'ds5-single'}),mock.patch.object(overlay.subprocess,'run',return_value=mock.Mock(returncode=0,stdout='{"isolation_issues":[]}')) as run:
             self.assertEqual(overlay.desktop_isolation_issues(),[])
             self.assertIn('--single-playstation',run.call_args.args[0])
 
     def test_release_failure_on_one_controller_does_not_strand_others(self):
-        overlay=load('desktop_release_overlay', ROOT/'prototypes/session-overlay.py')
+        overlay=load('desktop_release_overlay', ROOT/'src/session-overlay.py')
         self.app=overlay.QtCore.QCoreApplication.instance() or overlay.QtCore.QCoreApplication([])
         router=overlay.InputRouter();router.state['modes']={'/gone':0,'/present':0}
         with mock.patch.object(overlay,'set_property',side_effect=[RuntimeError('gone'),None]) as mutate:

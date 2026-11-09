@@ -44,6 +44,48 @@ class DoctorTests(unittest.TestCase):
         with patch.dict(m.os.environ, {'XDG_CURRENT_DESKTOP': 'gamescope'}, clear=True):
             self.assertTrue(m.in_gamescope())
 
+    def test_gamescope_runtime_checks_only_appear_inside_gamescope(self):
+        m = load()
+        for gaming in (False, True):
+            with self.subTest(gamescope=gaming), patch.object(m, 'in_gamescope', return_value=gaming), \
+                 patch.object(m, 'probe', return_value=(0, 'active')), \
+                 patch.object(m, 'routing_check', return_value=('PASS', 'ready')) as routing:
+                checks = m.collect()
+            names = {check['name'] for check in checks}
+            self.assertEqual('overlay:state' in names, gaming)
+            self.assertEqual('controller:isolation' in names, gaming)
+            self.assertFalse(any(check['status'] == 'SKIP' for check in checks))
+            self.assertEqual(routing.call_count, int(gaming))
+
+    def test_desktop_output_does_not_show_zero_skips(self):
+        m = load()
+        with patch.object(m, 'collect', return_value=[{'name': 'check', 'status': 'PASS', 'detail': 'ready'}]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(m.main([]), 0)
+        self.assertNotIn('skip', output.getvalue().lower())
+
+    def test_default_output_shows_only_warning_and_failure_details(self):
+        m = load()
+        checks = [{'name': status.lower() + '_check', 'status': status, 'detail': status + ' detail'}
+                  for status in ('PASS', 'WARN', 'FAIL', 'SKIP')]
+        for options in ([], ['-v'], ['--verbose']):
+            with self.subTest(options=options), patch.object(m, 'collect', return_value=checks), \
+                 contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(m.main(options), 1)
+            text = output.getvalue()
+            self.assertIn('[WARN] warn_check', text)
+            self.assertIn('[FAIL] fail_check', text)
+            self.assertEqual('[PASS] pass_check' in text, bool(options))
+            self.assertEqual('[SKIP] skip_check' in text, bool(options))
+
+    def test_json_keeps_all_checks_without_verbose(self):
+        m = load()
+        checks = [{'name': 'passed', 'status': 'PASS', 'detail': 'ready'},
+                  {'name': 'warning', 'status': 'WARN', 'detail': 'inspect'}]
+        with patch.object(m, 'collect', return_value=checks), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(m.main(['--json']), 0)
+        self.assertEqual(json.loads(output.getvalue())['checks'], checks)
+
     def test_sddm_override_precedence_and_comma_directories(self):
         m = load()
         with tempfile.TemporaryDirectory() as directory:
