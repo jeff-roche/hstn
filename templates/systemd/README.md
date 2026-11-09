@@ -12,7 +12,8 @@ affect operation. The commands below document manual installation and maintenanc
 `hstn desktop install` installs `hstn-desktop-overlay.service`, a KDE autostart
 entry, and three Desktop/application-menu icons. The autostart helper captures
 the current KDE environment in `%t/hstn-desktop-overlay.env`; it does not reuse
-the Gamescope environment file. `Type=dbus` waits for `org.hstn.DesktopOverlay`.
+the Gamescope environment file. `Type=notify` waits until the
+`org.hstn.DesktopOverlay` endpoint and KWin bridge are registered.
 Startup resolves graphical variables from the current KDE Plasma bus owner's
 process, verifying its UID/name, so a terminal retained across session changes
 cannot replace the current display authorization with an old session's values.
@@ -25,6 +26,11 @@ overlapping controller ownership even if the UI crashes. The existing root input
 guard remains required. Desktop startup preserves pre-existing InputPlumber
 owners; keyboard/mouse menu access remains available when controller setup fails.
 The focus bridge loads only HSTN's own scoped KWin script and unloads it on exit.
+Both overlay units use `ExitType=cgroup`, allowing the restore watchdog to finish
+after the UI exits. Desktop deliberately avoids `Type=dbus`: losing the bus name
+can otherwise cause systemd to kill the watchdog during compositor shutdown.
+Local transient-service fixtures verified cleanup after deliberate main-process
+failure for the simple and notify service types, including bus-name loss.
 The overlay service polls for supported USB and Bluetooth DualSense and Xbox controllers every 1.5 seconds and stays
 running with none attached. Each physical controller gets one virtual PlayStation
 output; owned button/motion/touchpad siblings remain suppressed. Controllers can

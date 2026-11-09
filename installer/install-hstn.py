@@ -191,7 +191,15 @@ def apply_user(source, locations, files, package=False):
             raise RuntimeError('Preserving edited retired files: ' + ', '.join(conflicts))
 
 
+def require_output_recovery_complete(locations):
+    if locations.session_runtime:
+        journal = locations.session_runtime/'hstn-handheld-output.json'
+        if journal.exists() or journal.is_symlink():
+            raise RuntimeError('Handheld controller output recovery remains; restart and stop HSTN successfully before updating or removing it')
+
+
 def remove_user(locations):
+    require_output_recovery_complete(locations)
     if not locations.state.exists() and not locations.desktop_state.exists():
         return []
     with state.Store(locations.state, allowed_paths(locations)) as store:
@@ -319,6 +327,8 @@ def preflight(source, locations, options, configure=False):
     for name in ('X11', 'XRes'):
         if not ctypes.util.find_library(name):
             errors.append(f'Missing required library: {name}')
+    if load('supported-controllers').legion_go_s_host() and importlib.util.find_spec('yaml') is None:
+        errors.append('Go S Desktop input mapping requires the system Python PyYAML module')
     mechanic = load('mechanic')
     status, detail = mechanic.module_check()
     if status != 'PASS':
@@ -608,6 +618,7 @@ def main(argv=None):
         for unit in USER_UNITS:
             if active[unit]:
                 run(['systemctl', '--user', 'stop', unit])
+        require_output_recovery_complete(locations)
         if args.action == 'uninstall':
             run(['qdbus-qt6', 'org.kde.KWin', '/Scripting', 'org.kde.kwin.Scripting.unloadScript', 'hstn-desktop-focus'], check=False)
             if not args.user_only:

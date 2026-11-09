@@ -4,10 +4,12 @@ PartOf=gamescope-session-plus@heroic.service gamescope-session-plus@ogui-steam.s
 After=gamescope-session-plus@heroic.service gamescope-session-plus@ogui-steam.service gamescope-session-plus@steam.service
 Conflicts=hstn-desktop-overlay.service
 After=hstn-desktop-overlay.service
+After=bazzite-native-steam-input.service
 ConditionPathExists=%t/session-switch-overlay.env
 
 [Service]
 Type=simple
+ExitType=cgroup
 EnvironmentFile=%t/session-switch-overlay.env
 ExecStart=/usr/bin/python3 %h/.local/bin/hstn-overlay --start-hidden --manage-input --timeout 0
 KillMode=mixed

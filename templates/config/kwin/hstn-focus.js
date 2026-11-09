@@ -8,10 +8,28 @@ let menuVisible = false;
 function isMenu(window) {
     return window && window.pid === hstnPid && window.caption === hstnTitle;
 }
+function isToast(window) {
+    return window && window.pid === hstnPid && window.caption === 'HSTN — Controller notification';
+}
 workspace.windowActivated.connect(function(window) {
-    if (!menuVisible && window && !isMenu(window)) lastApplication = window;
+    if (!menuVisible && window && !isMenu(window) && !isToast(window)) lastApplication = window;
 });
 function attachMenu(window) {
+    if (isToast(window)) {
+        // Native Wayland clients cannot position their own top-level windows.
+        function placeToast() {
+            const area = workspace.clientArea(KWin.PlacementArea, window);
+            const frame = window.frameGeometry;
+            window.frameGeometry = {x: area.x + area.width - frame.width - 24,
+                                    y: area.y + area.height - frame.height - 24,
+                                    width: frame.width, height: frame.height};
+            window.opacity = 0.8;
+            window.keepAbove = true;
+        }
+        window.windowShown.connect(placeToast);
+        placeToast();
+        return;
+    }
     if (!isMenu(window)) return;
     function shown() {
         if (!menuVisible) previousApplication = lastApplication;

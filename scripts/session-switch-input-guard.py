@@ -35,6 +35,11 @@ DEVPATH=="/devices/virtual/*", ATTRS{id/bustype}=="0003", GOTO="hstn_sources_end
 SUBSYSTEMS=="input", ATTRS{id/bustype}=="0003", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="02d1|02dd|02ea|0b12", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
 SUBSYSTEMS=="hid", KERNELS=="0005:045E:02E0.*|0005:045E:02FD.*|0005:045E:0B13.*|0005:045E:0B20.*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
 SUBSYSTEMS=="input", ATTRS{id/bustype}=="0005", ATTRS{id/vendor}=="045e", ATTRS{id/product}=="02e0|02fd|0b13|0b20", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+ATTR{[dmi/id]sys_vendor}!="LENOVO", GOTO="hstn_sources_end"
+ATTR{[dmi/id]product_name}!="83L3|83N6|83Q2|83Q3", GOTO="hstn_sources_end"
+DEVPATH=="/devices/virtual/*", GOTO="hstn_sources_end"
+SUBSYSTEMS=="hid", KERNELS=="0003:1A86:E310.*|0003:1A86:E311.*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+SUBSYSTEMS=="input", ATTRS{id/bustype}=="0003", ATTRS{id/vendor}=="1a86", ATTRS{id/product}=="e310|e311", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
 LABEL="hstn_sources_end"
 '''
 
@@ -57,6 +62,22 @@ for bus, products, transport in (('0003', XBOX_USB_PRODUCTS, 'usb'),
             'name': 'Xbox One / Series', 'output': 'xbox-series', 'transport': transport}
 
 
+LEGION_GO_S_MODELS = ('83L3', '83N6', '83Q2', '83Q3')
+for product in ('E310', 'E311'):
+    SUPPORTED_CONTROLLERS[f'0003:00001A86:0000{product}'] = {
+        'name': 'Lenovo Legion Go S', 'output': 'preserve', 'transport': 'usb',
+        'profile': 'legion-go-s'}
+
+
+def legion_go_s_host(sysfs=Path('/sys')):
+    try:
+        dmi = Path(sysfs)/'class/dmi/id'
+        return ((dmi/'sys_vendor').read_text().strip() == 'LENOVO' and
+                (dmi/'product_name').read_text().strip() in LEGION_GO_S_MODELS)
+    except OSError:
+        return False
+
+
 def normalized_identity(identity):
     if identity.get('HID_ID'):
         return identity['HID_ID'].upper()
@@ -67,23 +88,27 @@ def normalized_identity(identity):
         return ''
 
 
-def source_identity(identity, sysfs_virtual=False):
+def source_identity(identity, sysfs_virtual=False, sysfs=Path('/sys')):
     profile = SUPPORTED_CONTROLLERS.get(normalized_identity(identity))
     # BlueZ can expose physical Bluetooth HID through UHID. HSTN outputs use
     # USB HID identity, so the bus distinguishes these from Bluetooth sources.
-    return bool(profile and (not sysfs_virtual or profile['transport'] == 'bluetooth'))
+    return bool(profile and (not sysfs_virtual or profile['transport'] == 'bluetooth')
+                and (profile.get('profile') != 'legion-go-s' or legion_go_s_host(sysfs)))
 
 
 def supported_parent(source, sysfs=Path('/sys')):
     name = Path(source).name
-    subsystem = 'hidraw' if name.startswith('hidraw') else 'input'
+    subsystem = ('leds' if name == 'go_s:rgb:joystick_rings' else
+                 'hidraw' if name.startswith('hidraw') else 'input')
     device = (Path(sysfs)/'class'/subsystem/name/'device').resolve()
+    if subsystem == 'leds':
+        return str(device) if legion_go_s_host(sysfs) and (Path(sysfs)/'class/leds'/name).exists() else None
     virtual = Path(sysfs)/'devices/virtual' in device.parents
     candidate = None
     for parent in (device, *device.parents):
         try:
             identity = dict(line.split('=', 1) for line in (parent/'uevent').read_text().splitlines() if '=' in line)
-            if source_identity(identity, virtual):
+            if source_identity(identity, virtual, sysfs):
                 if identity.get('HID_ID'):
                     return str(parent)
                 # xpad exposes PRODUCT on the input root without a HID ancestor.
@@ -295,6 +320,274 @@ class RuleGuard:
         if changed:self.refresh(changed)
 
 
+
+# This socket accepts only a composite path, never caller-supplied mappings,
+# file paths, commands, or YAML. The peer must own the active local seat.
+DESKTOP_MAP_SOCKET = RUNTIME/'desktop-map.sock'
+COMPOSITE_PATH = re.compile(r'/org/shadowblip/InputPlumber/CompositeDevice[0-9]+')
+NAV_BUTTONS = {'DPadUp': 'ui_up', 'DPadDown': 'ui_down',
+               'DPadLeft': 'ui_left', 'DPadRight': 'ui_right',
+               'South': 'ui_accept', 'East': 'ui_back',
+               'LeftBumper': 'ui_l1', 'RightBumper': 'ui_r1'}
+
+
+def desktop_navigation_profile(original):
+    """Preserve unrelated mappings and outputs; consume only HSTN controls."""
+    import copy
+    import yaml
+    if len(original) > 65536:
+        raise ValueError('Controller profile is too large for Desktop HSTN')
+    result = yaml.safe_load(original)
+    if (not isinstance(result, dict) or result.get('version') != 1
+            or result.get('kind') != 'DeviceProfile'
+            or not isinstance(result.get('mapping'), list)
+            or result.get('target_devices') is not None):
+        raise ValueError('Desktop split input needs a version 1 profile without target overrides')
+    result = copy.deepcopy(result)
+    result.pop('target_devices', None)
+    result['name'] = 'HSTN Desktop Navigation'
+    mappings = []
+    for mapping in result['mapping']:
+        source = mapping.get('source_event', {}).get('gamepad', {})
+        if source.get('button') in NAV_BUTTONS or source.get('axis', {}).get('name') == 'LeftStick':
+            continue
+        mappings.append(mapping)
+    for button, action in NAV_BUTTONS.items():
+        mappings.append({'name': 'HSTN ' + button,
+                         'source_event': {'gamepad': {'button': button}},
+                         'target_events': [{'dbus': action}]})
+    mappings.append({'name': 'HSTN LeftStick',
+                     'source_event': {'gamepad': {'axis': {'name': 'LeftStick'}}},
+                     'target_events': [{'dbus': 'ui_' + direction}
+                                       for direction in ('up', 'down', 'left', 'right')]})
+    result['mapping'] = mappings
+    return result
+
+
+def profile_bus(path, operation, *args):
+    prefix = ['busctl', '--system', '--json=short']
+    interface = 'org.shadowblip.Input.CompositeDevice'
+    service = 'org.shadowblip.InputPlumber'
+    if operation == 'exists':
+        result = subprocess.run(['busctl', '--system', '--list', 'tree', service],
+                                capture_output=True, text=True, check=True, timeout=5)
+        return path in result.stdout.splitlines()
+    command = (prefix + ['get-property', service, path, interface, operation[4:]]
+               if operation.startswith('get:') else
+               prefix + ['call', service, path, interface, operation, *args])
+    result = subprocess.run(command, capture_output=True, text=True, check=True, timeout=5)
+    if not result.stdout.strip():
+        return None
+    data = json.loads(result.stdout)['data']
+    return data[0] if operation in ('GetProfileYaml',) else data
+
+
+def active_seat_uid():
+    def value(*args):
+        return subprocess.run(['loginctl', *args], capture_output=True, text=True,
+                              check=True, timeout=3).stdout.strip()
+    session = value('show-seat', 'seat0', '-p', 'ActiveSession', '--value')
+    if not session:
+        raise ValueError('No active local seat')
+    return int(value('show-session', session, '-p', 'User', '--value'))
+
+
+def desktop_map_sources(sources):
+    if not legion_go_s_host() or not sources or sources.count('') > 1:
+        return False
+    if '' in sources and not Path('/sys/class/leds/go_s:rgb:joystick_rings').exists():
+        return False
+    inputs = [source for source in sources if source and Path(source).name != 'go_s:rgb:joystick_rings']
+    if not inputs:
+        return False
+    for source in inputs:
+        parent = supported_parent(source)
+        if not parent:
+            return False
+        try:
+            identity = dict(line.split('=', 1) for line in (Path(parent)/'uevent').read_text().splitlines() if '=' in line)
+            if SUPPORTED_CONTROLLERS.get(normalized_identity(identity), {}).get('profile') != 'legion-go-s':
+                return False
+        except OSError:
+            return False
+    return all(not source or supported_parent(source) for source in sources)
+
+
+class DesktopProfileBridge:
+    """Root-owned, fixed-purpose profile lease with journal-before-write recovery."""
+    def __init__(self, guard, *, bus=profile_bus, active_uid=active_seat_uid):
+        self.guard, self.bus, self.active_uid = guard, bus, active_uid
+        self.journal = guard.state/'desktop-profiles.json'
+        self.records = {}
+        self.client = None
+        self.client_path = None
+        self.buffer = b''
+        self.server = None
+        if self.journal.exists():
+            with guard.open_trusted(self.journal, private=True) as stream:
+                self.records = json.load(stream)
+            for path, record in self.records.items():
+                if (not COMPOSITE_PATH.fullmatch(path) or not isinstance(record.get('original'), str)
+                        or not isinstance(record.get('applied'), dict)):
+                    raise ValueError('Invalid Desktop profile recovery record')
+        self.restore_all()
+
+    def save(self):
+        if self.records:
+            atomic_json(self.journal, self.records)
+        else:
+            self.journal.unlink(missing_ok=True)
+
+    def apply(self, path):
+        import yaml
+        if (not COMPOSITE_PATH.fullmatch(path)
+                or not desktop_map_sources(self.bus(path, 'get:SourceDevicePaths'))):
+            raise ValueError('Desktop mapping requires a verified Go S composite')
+        if self.records:
+            raise ValueError('A Desktop mapping is already leased or needs recovery')
+        if self.bus(path, 'get:ProfilePath'):
+            raise ValueError('A file-backed profile must be preserved; Desktop split mapping was refused')
+        original = self.bus(path, 'GetProfileYaml')
+        applied = desktop_navigation_profile(original)
+        self.records[path] = {'original': original, 'applied': applied,
+                              'sources': sorted(self.bus(path, 'get:SourceDevicePaths'))}
+        self.save()
+        try:
+            self.bus(path, 'LoadProfileFromYaml', 's', json.dumps(applied))
+            if yaml.safe_load(self.bus(path, 'GetProfileYaml')) != applied:
+                raise ValueError('InputPlumber did not install the expected Desktop mapping')
+        except Exception:
+            self.restore_all()
+            raise
+
+    def check(self, path):
+        """Keep our leased navigation when a manager re-sends its exact baseline.
+
+        DeckyPlumber re-applies Default when Steam's active app changes. Only the
+        recorded baseline may be overlaid again; distinct edits are preserved.
+        """
+        import yaml
+        record = self.records[path]
+        sources = self.bus(path, 'get:SourceDevicePaths')
+        if (sorted(sources) != record.get('sources') or not desktop_map_sources(sources)
+                or self.bus(path, 'get:ProfilePath')):
+            raise ValueError('Desktop controller ownership changed')
+        current = yaml.safe_load(self.bus(path, 'GetProfileYaml'))
+        if current == record['applied']:
+            return False
+        if current != yaml.safe_load(record['original']):
+            raise ValueError('Desktop profile changed externally; preserving the new profile')
+        self.bus(path, 'LoadProfileFromYaml', 's', json.dumps(record['applied']))
+        if yaml.safe_load(self.bus(path, 'GetProfileYaml')) != record['applied']:
+            raise ValueError('Desktop navigation could not be re-established')
+        print('Desktop navigation restored after baseline profile reset', flush=True)
+        return True
+
+    def restore_all(self):
+        if not self.records:
+            return
+        import yaml
+        for path, record in list(self.records.items()):
+            if not self.bus(path, 'exists'):
+                # Destroying the composite also destroys its temporary profile.
+                del self.records[path]
+                self.save()
+                continue
+            if (record.get('sources') is not None
+                    and sorted(self.bus(path, 'get:SourceDevicePaths')) != record['sources']):
+                raise ValueError('Desktop controller sources changed; recovery record retained')
+            if self.bus(path, 'get:ProfilePath'):
+                raise ValueError('Desktop profile became file-backed; recovery record retained')
+            current = yaml.safe_load(self.bus(path, 'GetProfileYaml'))
+            if current == record['applied']:
+                self.bus(path, 'LoadProfileFromYaml', 's', record['original'])
+                current = yaml.safe_load(self.bus(path, 'GetProfileYaml'))
+            if current != yaml.safe_load(record['original']):
+                raise ValueError('Desktop profile changed externally; recovery record retained')
+            del self.records[path]
+            self.save()
+
+    def start(self):
+        self.path = self.guard.state/'desktop-map.sock'
+        if self.path.exists() or self.path.is_symlink():
+            info = self.path.lstat()
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != self.guard.owner_uid:
+                raise ValueError('Unsafe Desktop mapping socket')
+            self.path.unlink()
+        self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server.bind(str(self.path))
+        self.path.chmod(0o666)
+        self.server.listen(1)
+
+    def disconnect(self):
+        if self.client:
+            self.client.close()
+        self.client, self.client_path, self.buffer = None, None, b''
+        try:
+            self.restore_all()
+        except Exception as error:
+            # A changed profile retains its recovery journal. It must not stop
+            # the independent physical-source reservation/udev guard.
+            print('Desktop mapping recovery retained: ' + str(error), flush=True)
+
+    def poll(self, timeout=.5):
+        import select
+        import struct
+        sockets = ([self.client] if self.client else []) + [self.server]
+        for ready in select.select(sockets, [], [], timeout)[0]:
+            if ready is self.server:
+                client, _ = self.server.accept()
+                _, uid, _ = struct.unpack('3i', client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                try:
+                    if self.client or uid != self.active_uid():
+                        raise ValueError('Desktop mapping requires the active local user')
+                    self.client = client
+                    self.client_uid = uid
+                    self.buffer = b''
+                except Exception:
+                    client.close()
+                continue
+            try:
+                data = self.client.recv(4096)
+                if not data:
+                    self.disconnect()
+                    continue
+                self.buffer += data
+                if len(self.buffer) > 4096:
+                    raise ValueError('Desktop mapping request too large')
+                if b'\n' not in self.buffer:
+                    continue
+                request, self.buffer = self.buffer.split(b'\n', 1)
+                request = json.loads(request)
+                if self.client_uid != self.active_uid():
+                    raise ValueError('Desktop mapping seat ownership changed')
+                response = {'ok': True}
+                if set(request) == {'open'} and isinstance(request['open'], str) and self.client_path is None:
+                    self.apply(request['open'])
+                    self.client_path = request['open']
+                elif request == {'close': True} and self.client_path:
+                    self.restore_all()
+                    self.client_path = None
+                elif request == {'check': True} and self.client_path:
+                    response['repaired'] = self.check(self.client_path)
+                else:
+                    raise ValueError('Unsupported Desktop mapping request')
+                self.client.sendall(json.dumps(response).encode() + b'\n')
+            except Exception as error:
+                print('Desktop mapping: ' + str(error), flush=True)
+                if self.client:
+                    try:self.client.sendall(json.dumps({'error': str(error)}).encode() + b'\n')
+                    except OSError:pass
+                self.disconnect()
+
+    def close(self):
+        try:
+            self.disconnect()
+        finally:
+            if self.server:
+                self.server.close()
+                self.path.unlink(missing_ok=True)
+
 def notify(message):
     address=os.environ.get('NOTIFY_SOCKET')
     if not address:return
@@ -328,6 +621,7 @@ def main():
     fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
     if legacy_active():raise SystemExit('Stop session-switch-input-diagnostic.service before starting the permanent guard.')
     guard=RuleGuard();reservation=SourceReservation(guard);running=True;active=RUNTIME/'active'
+    desktop_profiles = DesktopProfileBridge(guard)
     def stop(*_):
         nonlocal running
         running=False
@@ -335,6 +629,7 @@ def main():
     try:
         reservation.install()
         guard.scan_once()
+        desktop_profiles.start()
         ticks=int(Path('/proc/self/stat').read_text().rsplit(') ',1)[1].split()[19])
         atomic_json(active,{'version':1,'kind':'session-switch-input-guard','pid':os.getpid(),'start_ticks':ticks},0o644)
         if notify('READY=1\nSTATUS=Watching InputPlumber runtime HID rules') is False:
@@ -342,11 +637,12 @@ def main():
         print('Input guard ready; watching across sessions.',flush=True)
         while running:
             reservation.owned()
-            guard.scan_once();time.sleep(.5)
+            guard.scan_once();desktop_profiles.poll(.5)
     finally:
         notify('STOPPING=1')
         active.unlink(missing_ok=True)
         try:
+            desktop_profiles.close()
             if not running:
                 try:guard.restore()
                 finally:reservation.restore()

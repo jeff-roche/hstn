@@ -28,3 +28,24 @@ class BindingTest(TestCase):
         self.assertIsNone(overlay.compatibility_targets('Sony DualSense',['/dev/input/event17'],True))
         self.assertIsNone(overlay.compatibility_targets('Xbox controller',['/dev/hidraw1'],True))
         self.assertIsNone(overlay.compatibility_targets('Sony DualSense',['/dev/hidraw1'],False))
+
+
+    def test_go_s_activation_uses_guide_then_quick_access(self):
+        with mock.patch.object(overlay, 'bus') as bus:
+            overlay.configure_menu_activation('/composite', profile='legion-go-s')
+        bus.assert_called_once_with('call', overlay.SERVICE, '/composite', overlay.COMPOSITE,
+            'SetInterceptActivation', 'ass', '2', 'Gamepad:Button:Guide',
+            'Gamepad:Button:QuickAccess', 'Gamepad:Button:QuickAccess')
+
+    def test_xbox_keeps_guide_then_view(self):
+        with mock.patch.object(overlay, 'bus') as bus:
+            overlay.configure_menu_activation('/composite', profile='xbox')
+        bus.assert_called_once_with('call', overlay.SERVICE, '/composite', overlay.COMPOSITE,
+            'SetInterceptActivation', 'ass', '2', 'Gamepad:Button:Guide',
+            'Gamepad:Button:Select', 'Gamepad:Button:QuickAccess')
+
+    def test_go_s_cleanup_restores_default_guide_binding(self):
+        with mock.patch.object(overlay, 'bus') as bus:
+            overlay.configure_menu_activation('/composite', restore_default=True, profile='legion-go-s')
+        bus.assert_called_once_with('call', overlay.SERVICE, '/composite', overlay.COMPOSITE,
+            'SetInterceptActivation', 'ass', '1', 'Gamepad:Button:Guide', 'Gamepad:Button:Guide')

@@ -111,3 +111,180 @@ class ControllerHotplugTest(unittest.TestCase):
         with mock.patch.object(overlay, 'bus') as bus:
             self.router.retire_disconnected(result)
         bus.assert_not_called()
+
+
+    def test_idle_baseline_handheld_is_adopted_without_replacing_targets(self):
+        self.router.watchdog = mock.Mock()
+        self.router.state['baseline'] = ['/org/CompositeDevice0']
+        self.router.dbus = mock.Mock()
+        properties = {'SourceDevicePaths': ['/dev/hidraw0'], 'InterceptMode': 0,
+                      'Name': 'Lenovo Legion Go S', 'DbusDevices': ['/target']}
+        with mock.patch.object(overlay.controllers, 'connected', return_value=True), \
+             mock.patch.object(overlay.controllers, 'supported_sources', return_value=True), \
+             mock.patch.object(overlay.controllers, 'preserved_composite', return_value=True), \
+             mock.patch.object(overlay.controllers, 'composite_profile', return_value='legion-go-s'), \
+             mock.patch.object(overlay.subprocess, 'run', return_value=mock.Mock(stdout='/org/CompositeDevice0')), \
+             mock.patch.object(overlay, 'get_property', side_effect=lambda path, interface, name: properties[name]), \
+             mock.patch.object(overlay, 'set_property') as mutate, \
+             mock.patch.object(overlay, 'configure_menu_activation') as activation:
+            self.router.refresh()
+            self.assertEqual(self.router.target_families['/target'], 'handheld')
+            self.assertEqual(self.router.state['modes'], {'/org/CompositeDevice0': 0})
+            activation.assert_called_once_with('/org/CompositeDevice0', profile='legion-go-s')
+            mutate.assert_called_once_with('/org/CompositeDevice0', overlay.COMPOSITE, 'InterceptMode', 'u', 1)
+            self.router.refresh()
+            activation.assert_called_once()
+
+    def test_handheld_cleanup_restores_mode_and_default_activation_without_stopping_baseline(self):
+        state = {'baseline': ['/org/CompositeDevice0'], 'modes': {'/org/CompositeDevice0': 0}, 'activation_paths': ['/org/CompositeDevice0']}
+        with mock.patch.object(overlay, 'configure_menu_activation') as activation, \
+             mock.patch.object(overlay, 'set_property') as mutate, \
+             mock.patch.object(overlay, 'bus') as bus:
+            overlay.restore(state)
+        activation.assert_called_once_with('/org/CompositeDevice0', restore_default=True)
+        mutate.assert_called_once_with('/org/CompositeDevice0', overlay.COMPOSITE, 'InterceptMode', 'u', 0)
+        bus.assert_not_called()
+
+    def test_heroic_go_s_output_recovery_is_owned_before_controller_claim(self):
+        self.router.watchdog = mock.Mock()
+        self.router.state['baseline'] = ['/org/CompositeDevice0']
+        self.router.dbus = mock.Mock()
+        output = self.router.handheld_output = mock.Mock()
+        trace = []
+        def acquire(path, sources):
+            saved = self.router.watchdog.stdin.write.call_args.args[0]
+            self.assertTrue(overlay.json.loads(saved)['handheld_output'])
+            trace.append('acquire output')
+        output.acquire.side_effect = acquire
+        properties = {'SourceDevicePaths': ['/dev/hidraw0'], 'InterceptMode': 0,
+                      'Name': 'Lenovo Legion Go S', 'DbusDevices': ['/target']}
+        with mock.patch.dict(os.environ, {'SESSION_SWITCH_CURRENT_SESSION':'heroic'}), \
+             mock.patch.object(overlay.controllers, 'connected', return_value=True), \
+             mock.patch.object(overlay.controllers, 'supported_sources', return_value=True), \
+             mock.patch.object(overlay.controllers, 'preserved_composite', return_value=True), \
+             mock.patch.object(overlay.controllers, 'composite_profile', return_value='legion-go-s'), \
+             mock.patch.object(overlay.subprocess, 'run', return_value=mock.Mock(stdout='/org/CompositeDevice0')), \
+             mock.patch.object(overlay, 'get_property', side_effect=lambda path, interface, name: properties[name]), \
+             mock.patch.object(overlay, 'set_property'), \
+             mock.patch.object(overlay, 'configure_menu_activation', side_effect=lambda *a, **kw: trace.append('claim controller')):
+            self.router.refresh()
+        self.assertEqual(trace, ['acquire output', 'claim controller'])
+        self.assertEqual(self.router.target_families['/target'], 'handheld')
+        output.recover.side_effect = lambda **kw: trace.append('restore output')
+        with mock.patch.object(overlay, 'handheld_output_lease', return_value=output), \
+             mock.patch.object(overlay, 'configure_menu_activation'), \
+             mock.patch.object(overlay, 'set_property', side_effect=lambda *a: trace.append('restore mode')):
+            overlay.restore(self.router.state)
+        output.recover.assert_called_once_with(owned=True)
+        self.assertEqual(trace[-2:], ['restore output', 'restore mode'])
+
+
+    def test_go_s_back_waits_for_release_and_ignores_duplicates(self):
+        self.router.target_families['gos'] = 'handheld'
+        self.router.visible = True
+        events = []
+        self.router.action.connect(events.append)
+        for value in (1, 1):
+            self.router.controller_event('gos', 'ui_back', value)
+        self.assertEqual(events, [])
+        for value in (0, 0):
+            self.router.controller_event('gos', 'ui_back', value)
+        self.assertEqual(events, ['ui_back'])
+        self.router.controller_event('gos', 'ui_back', 1)
+        self.router.controller_event('gos', 'ui_back', 0)
+        self.assertEqual(events, ['ui_back', 'ui_back'])
+
+    def test_go_s_unmatched_back_release_recovers_stale_inputplumber_state(self):
+        self.router.target_families['gos'] = 'handheld'
+        events = []
+        self.router.action.connect(events.append)
+        with mock.patch.object(overlay, 'set_property'):
+            for _ in range(3):
+                self.router.capture(True)
+                self.router.controller_event('gos', 'ui_back', 0)
+                self.router.controller_event('gos', 'ui_back', 0)
+                self.router.capture(False)
+                self.router.controller_event('gos', 'ui_back', 0)
+        self.assertEqual(events, ['ui_back'] * 3)
+
+    def test_xbox_back_still_activates_on_press(self):
+        self.router.target_families['xbox'] = 'xbox'
+        events = []
+        self.router.action.connect(events.append)
+        self.router.controller_event('xbox', 'ui_back', 1)
+        self.assertEqual(events, ['ui_back'])
+        self.router.controller_event('xbox', 'ui_back', 0)
+        self.assertEqual(events, ['ui_back'])
+
+    def test_go_s_accept_releases_before_closing_and_works_on_next_open(self):
+        self.router.target_families['gos'] = 'handheld'
+        events = []
+        def select(action):
+            self.assertNotIn('ui_accept', self.router.controller_pressed['gos'])
+            events.append(action)
+            self.router.capture(False)
+        self.router.action.connect(select)
+        with mock.patch.object(overlay, 'set_property'):
+            for cycle in range(3):
+                self.router.capture(True)
+                self.router.controller_event('gos', 'ui_accept', 1)
+                self.router.controller_event('gos', 'ui_accept', 1)
+                self.assertEqual(len(events), cycle)
+                self.router.controller_event('gos', 'ui_accept', 0)
+                self.router.controller_event('gos', 'ui_accept', 0)
+                self.assertEqual(len(events), cycle + 1)
+        self.assertEqual(events, ['ui_accept'] * 3)
+
+    def test_go_s_first_accept_release_recovers_old_stale_press_once(self):
+        self.router.target_families['gos'] = 'handheld'
+        self.router.controller_pressed['gos'] = {'ui_accept'}
+        events = []
+        self.router.action.connect(events.append)
+        with mock.patch.object(overlay, 'set_property'):
+            self.router.capture(True)
+            # InputPlumber suppresses the new press because its old target is held.
+            self.router.controller_event('gos', 'ui_accept', 0)
+            self.router.controller_event('gos', 'ui_accept', 0)
+            self.router.capture(False)
+            self.router.controller_event('gos', 'ui_accept', 0)
+        self.assertEqual(events, ['ui_accept'])
+        self.assertNotIn('ui_accept', self.router.controller_pressed['gos'])
+
+    def test_go_s_desktop_splits_controls_and_restores_before_forwarding(self):
+        self.router.desktop = True
+        self.router.state['modes'] = {'/gos': 0}
+        self.router.path_sources['/gos'] = ('/dev/hidraw1',)
+        trace = []
+        lease = mock.Mock()
+        lease.close.side_effect = lambda: trace.append('restore profile')
+        def acquire(path):
+            trace.append('map ' + path)
+            return lease
+        with mock.patch.object(overlay.controllers, 'composite_profile', return_value='legion-go-s'), \
+             mock.patch.object(overlay, 'desktop_isolation_issues', return_value=[]), \
+             mock.patch.object(overlay, 'DesktopMapLease', side_effect=acquire), \
+             mock.patch.object(overlay, 'set_property', side_effect=lambda *args: trace.append(args[-1])):
+            self.router.capture(True)
+            self.assertIs(self.router.desktop_maps['/gos'], lease)
+            self.router.capture(False)
+        self.assertEqual(trace, [2, 'map /gos', 1, 2, 'restore profile', 1])
+        self.assertEqual(self.router.desktop_maps, {})
+
+    def test_go_s_split_mapping_failure_does_not_enable_forwarding(self):
+        self.router.desktop = True
+        self.router.state['modes'] = {'/gos': 0}
+        with mock.patch.object(overlay.controllers, 'composite_profile', return_value='legion-go-s'), \
+             mock.patch.object(overlay, 'desktop_isolation_issues', return_value=[]), \
+             mock.patch.object(overlay, 'DesktopMapLease', side_effect=RuntimeError('mapping failed')), \
+             mock.patch.object(overlay, 'set_property') as mode:
+            with self.assertRaisesRegex(RuntimeError, 'mapping failed'):
+                self.router.capture(True)
+        mode.assert_called_once_with('/gos', overlay.COMPOSITE, 'InterceptMode', 'u', 2)
+
+    def test_stick_reversal_releases_opposite_navigation_state(self):
+        self.router.target_families['gos'] = 'handheld'
+        events = []
+        self.router.action.connect(events.append)
+        for event in ('ui_left', 'ui_right', 'ui_left'):
+            self.router.controller_event('gos', event, .9)
+        self.assertEqual(events, ['ui_left', 'ui_right', 'ui_left'])

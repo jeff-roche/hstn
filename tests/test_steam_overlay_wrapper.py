@@ -24,6 +24,21 @@ class SteamOverlayWrapperTest(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(json.loads(output.read_text()),['steam','-gamepadui','--label','hello world','$(touch /tmp/must-not-run)'])
 
+    def test_bazzite_disabled_override_wraps_packaged_steam_instead_of_reenabling_ogui(self):
+        template = (ROOT/'templates/config/gamescope-session-plus/sessions.d/ogui-steam').read_text()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vendor = root/'steam'
+            vendor.write_text('export CLIENTCMD=\'steam -gamepadui -steamos3 --label "hello world"\'\n')
+            script = template.replace('/usr/share/gamescope-session-plus/sessions.d/steam', str(vendor))
+            script += '\npython3 -c \'import json,os; print(json.dumps([os.environ["SESSION_SWITCH_STEAM_CLIENTCMD"],os.environ["CLIENTCMD"]]))\'\n'
+            result = subprocess.run(['bash', '-c', script], env={**os.environ, 'HOME': directory},
+                                    capture_output=True, text=True, check=True)
+            original, wrapped = json.loads(result.stdout)
+            self.assertEqual(original, 'steam -gamepadui -steamos3 --label "hello world"')
+            self.assertEqual(wrapped, directory+'/.local/bin/steam-session-with-overlay')
+            self.assertNotIn('/sessions.d/ogui-steam', template)
+
     def test_opengamepadui_client_is_executed_without_our_overlay_wrapper(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);program=root/'opengamepadui';output=root/'args.json'

@@ -45,7 +45,7 @@ def main(timeout=60, single_playstation=False):
                 print('Physical input exclusion verified before launcher startup.', flush=True)
                 return 0
         time.sleep(1)
-    print('Input isolation timed out; custom overlay will be stopped.', flush=True)
+    print('Input isolation timed out; controller routing is still unverified.', flush=True)
     return 1
 
 

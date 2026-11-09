@@ -31,7 +31,7 @@ for width,height in [(854,480),(1280,800),(1920,1080)]:
   assert abs(icon.mapTo(menu,icon.rect().center()).y()-text.mapTo(menu,text.rect().center()).y())<=1
  # Prompts follow the physical controller family, then real keyboard navigation.
  assert menu.input_family=='keyboard'
- for family, words in [('xbox','A: select. B: back.'),('playstation','Cross: select. Circle: back.')]:
+ for family, words in [('handheld','A: select. B: back.'),('xbox','A: select. B: back.'),('playstation','Cross: select. Circle: back.')]:
   menu.set_input_family(family)
   assert menu.footer.accessibleName()==words
   assert all(not label.pixmap().isNull() for label in menu.footer.glyphs.values())

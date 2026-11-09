@@ -2,12 +2,15 @@
 Description=HSTN controller overlay (KDE Desktop)
 PartOf=graphical-session.target
 After=graphical-session.target
+# Bazzite's optional native-input oneshot must finish before HSTN leases a profile.
+After=bazzite-native-steam-input.service
 Conflicts=session-switch-overlay.service
 ConditionPathExists=%t/hstn-desktop-overlay.env
 
 [Service]
-Type=dbus
-BusName=org.hstn.DesktopOverlay
+Type=notify
+NotifyAccess=main
+ExitType=cgroup
 EnvironmentFile=%t/hstn-desktop-overlay.env
 Environment=SESSION_SWITCH_REQUIRE_INPUT_GUARD=1
 Environment=SESSION_SWITCH_INPUT_TARGET=ds5-single
