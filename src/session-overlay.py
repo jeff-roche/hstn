@@ -206,6 +206,7 @@ class ControllerEvents(QtCore.QObject):
 
 class InputRouter(QtCore.QObject):
     action = QtCore.Signal(str)
+    input_family = QtCore.Signal(str)
     fatal = QtCore.Signal(str)
 
     def __init__(self, manage=False, lease=None):
@@ -215,6 +216,7 @@ class InputRouter(QtCore.QObject):
         self.targets = set()
         self.bindings = {}
         self.target_paths = {}
+        self.target_families = {}
         self.path_sources = {}
         self.controller_pressed = {}
         self.dbus = QtDBus.QDBusConnection.systemBus()
@@ -234,11 +236,11 @@ class InputRouter(QtCore.QObject):
             self.guard_status = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(self.guard_status)
         if os.environ.get('SESSION_SWITCH_INPUT_TARGET') == 'ds5-single':
-            spec = importlib.util.spec_from_file_location('playstation_output',
-                Path(__file__).resolve().parents[1] / 'scripts/playstation-output.py')
+            spec = importlib.util.spec_from_file_location('controller_outputs',
+                Path(__file__).resolve().parents[1] / 'scripts/controller-outputs.py')
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
-            self.playstation = module.PlayStationOutputs(self.set_targets)
+            self.playstation = module.ControllerOutputs(self.set_targets)
 
     def save(self):
         self.watchdog.stdin.write(json.dumps(self.state) + '\n')
@@ -301,12 +303,23 @@ class InputRouter(QtCore.QObject):
                              'InputEvent', receiver, QtCore.SLOT('on_event(QString,double)'))
         self.targets.discard(target)
         self.target_paths.pop(target, None)
+        self.target_families.pop(target, None)
         self.controller_pressed.pop(target, None)
         if receiver is not self:
             receiver.deleteLater()
 
     def set_targets(self, path, targets):
         bus('call', SERVICE, path, COMPOSITE, 'SetTargetDevices', 'as', str(len(targets)), *targets)
+
+    def retire_disconnected(self, current_sources):
+        # InputPlumber can retain a composite and its outputs after its last
+        # source disappears. Only stop composites HSTN previously intercepted.
+        for path in list(current_sources):
+            if (not current_sources[path] and path in self.state['modes']
+                    and path not in self.state['baseline']):
+                bus('call', SERVICE, path, COMPOSITE, 'Stop')
+                del current_sources[path]
+        return current_sources
 
     def refresh(self):
         if not self.guard_available():
@@ -328,6 +341,8 @@ class InputRouter(QtCore.QObject):
                                     capture_output=True, text=True, check=True, timeout=3)
             paths = [p for p in result.stdout.splitlines() if p.rsplit('/', 1)[-1].startswith('CompositeDevice')]
             current_sources = {path: tuple(get_property(path, COMPOSITE, 'SourceDevicePaths')) for path in paths}
+            current_sources = self.retire_disconnected(current_sources)
+            paths = list(current_sources)
             vanished = {path for path in self.state['modes'] if path not in current_sources or
                         (path in self.path_sources and self.path_sources[path] != current_sources[path])}
             for target, path in list(self.target_paths.items()):
@@ -359,7 +374,7 @@ class InputRouter(QtCore.QObject):
                 ready = self.playstation.update(records)
                 if self.playstation.phase != self.playstation_phase:
                     self.playstation_phase = self.playstation.phase
-                    print(f'PlayStation output initialization: {self.playstation_phase}', flush=True)
+                    print(f'Controller output initialization: {self.playstation_phase}', flush=True)
                     for error in self.playstation.failures.values():
                         print(f'Controller initialization: {error}', file=sys.stderr, flush=True)
             for path in paths:
@@ -408,6 +423,8 @@ class InputRouter(QtCore.QObject):
                         self.targets.add(target)
                         self.bindings[target] = receiver
                         self.target_paths[target] = path
+                        self.target_families[target] = ('xbox' if any(
+                            controllers.xbox_source(source) for source in current_sources[path]) else 'playstation')
                 self.state['modes'][path] = original
                 self.state['activation_paths'].append(path)
                 self.save()
@@ -427,7 +444,7 @@ class InputRouter(QtCore.QObject):
             raise RuntimeError('Input guard unavailable')
         if visible and self.desktop:
             if not self.state['modes']:
-                raise RuntimeError('No controller is ready. Connect a supported controller and wait for PS+Create to become available.')
+                raise RuntimeError('No controller is ready. Connect a supported controller and wait for Guide+Select to become available.')
             issues = desktop_isolation_issues()
             if issues:
                 raise RuntimeError('; '.join(issues))
@@ -455,6 +472,9 @@ class InputRouter(QtCore.QObject):
         if event in pressed:
             return
         pressed.add(event)
+        if event in ('ui_quick', 'ui_up', 'ui_down', 'ui_left', 'ui_right',
+                     'ui_accept', 'ui_back', 'ui_l1', 'ui_r1'):
+            self.input_family.emit(self.target_families.get(controller, 'playstation'))
         print(f'Controller event: {event}', flush=True)
         self.action.emit(event)
 
@@ -546,6 +566,121 @@ class DestinationButton(QtWidgets.QPushButton):
             painter.drawText(badge, QtCore.Qt.AlignCenter, 'Current')
 
 
+class ControllerConnections(QtCore.QObject):
+    changed = QtCore.Signal(str, str, bool)
+
+    def __init__(self, snapshot=controllers.physical_controllers):
+        super().__init__()
+        self.snapshot = snapshot
+        self.previous = snapshot()  # Existing devices at startup are not hotplug.
+        self.timer = QtCore.QTimer(self)
+        self.timer.setInterval(1500)
+        self.timer.timeout.connect(self.refresh)
+
+    def refresh(self):
+        current = self.snapshot()
+        for parent in sorted(self.previous.keys() - current.keys()):
+            device = self.previous[parent]
+            self.changed.emit(device['name'], device['transport'], False)
+        for parent in sorted(current.keys() - self.previous.keys()):
+            device = current[parent]
+            self.changed.emit(device['name'], device['transport'], True)
+        self.previous = current
+
+
+class ControllerToast(QtWidgets.QFrame):
+    """A small, non-interactive notification window, separate from the menu."""
+    def __init__(self, desktop=False):
+        super().__init__()
+        self.desktop = desktop
+        self.opacity = 0.8
+        if desktop:
+            self.setWindowOpacity(self.opacity)
+        self.pending = []
+        self.setWindowTitle('HSTN — Controller notification')
+        self.setWindowFlags(QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint |
+                            QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.WindowDoesNotAcceptFocus |
+                            QtCore.Qt.WindowTransparentForInput)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+        self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+        self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(QtCore.Qt.NoFocus)
+        self.setStyleSheet('QLabel {color:#FFF5E2; border:0; background:transparent;}')
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(12)
+        self.rocket = QtWidgets.QLabel()
+        self.rocket.setFixedSize(34, 34)
+        self.rocket.setPixmap(QtGui.QPixmap(str(ASSETS / 'logo/hstn-rocket-48.png')).scaled(
+            34, 34, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self.rocket.setAccessibleName('HSTN')
+        layout.addWidget(self.rocket)
+        self.message = QtWidgets.QLabel()
+        self.message.setWordWrap(True)
+        self.message.setStyleSheet('font-size:16px; font-weight:600;')
+        layout.addWidget(self.message, 1)
+        self.transport = QtWidgets.QLabel()
+        self.transport.setFixedSize(24, 24)
+        layout.addWidget(self.transport)
+        self.timer = QtCore.QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.setInterval(4000)
+        self.timer.timeout.connect(self.advance)
+
+    def paintEvent(self, event):
+        # The window itself must have transparent corners; stylesheet rounding
+        # alone leaves the native rectangular surface visible beneath it.
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor('#07172E'))
+        painter.drawRoundedRect(QtCore.QRectF(self.rect()), 16, 16)
+
+    @QtCore.Slot(str, str, bool)
+    def notify(self, name, transport, connected):
+        self.pending = (self.pending + [(name, transport, connected)])[-6:]
+        if not self.timer.isActive():
+            self.advance()
+
+    def advance(self):
+        self.dismiss()
+        if not self.pending:
+            return
+        name, transport, connected = self.pending.pop(0)
+        text = name + (' connected' if connected else ' disconnected')
+        self.message.setText(name + ('\nConnected' if connected else '\nDisconnected'))
+        self.transport.setPixmap(QtGui.QIcon(str(ASSETS / 'controller' / (transport + '.svg'))).pixmap(24, 24))
+        self.transport.setAccessibleName('Bluetooth' if transport == 'bluetooth' else 'USB')
+        self.setAccessibleName(text + ', ' + self.transport.accessibleName())
+        screen = QtWidgets.QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        self.setFixedSize(min(360, max(180, area.width() - 48)), 76)
+        self.move(area.right() - self.width() - 23, area.bottom() - self.height() - 23)
+        if not self.desktop:
+            try:
+                # Gamescope treats a small overlay with no input focus as a
+                # notification. Tag before mapping to avoid a game-focus change.
+                window = int(self.winId())
+                xproperty(window, 'STEAM_INPUT_FOCUS', 0)
+                xproperty(window, 'STEAM_OVERLAY', 1)
+                xproperty(window, '_NET_WM_WINDOW_OPACITY', round(self.opacity * 0xffffffff))
+            except Exception as error:
+                print(f'Controller notification tagging failed: {error}', file=sys.stderr)
+                return
+        self.show()
+        self.timer.start()
+
+    def dismiss(self):
+        self.timer.stop()
+        if self.isVisible() and not self.desktop:
+            try:
+                xproperty(int(self.winId()), '_NET_WM_WINDOW_OPACITY', 0)
+                xproperty(int(self.winId()), 'STEAM_OVERLAY', 0)
+            except Exception as error:
+                print(f'Controller notification cleanup failed: {error}', file=sys.stderr)
+        self.hide()
+
+
 class ControllerFooter(QtWidgets.QWidget):
     """Center prompt images and text in native layout cells, without HTML baselines."""
     def __init__(self):
@@ -574,7 +709,6 @@ class ControllerFooter(QtWidgets.QWidget):
             prompt_row.addWidget(self.labels[name])
             row.addWidget(prompt)
             self.rows.append(prompt_row)
-        row.addWidget(QtWidgets.QLabel('· Enter / Esc'))
 
     def add_glyph(self, row, name):
         label = QtWidgets.QLabel()
@@ -582,21 +716,33 @@ class ControllerFooter(QtWidgets.QWidget):
         row.addWidget(label)
         self.glyphs[name] = label
 
-    def configure(self, review, size):
+    def configure(self, review, size, family='keyboard'):
         self.scroll.setVisible(review)
         for row in self.rows:
             row.setSpacing(max(3, size//6))
-        for name, label in self.glyphs.items():
+        names = {
+            'playstation': ('l1', 'r1', 'cross', 'circle'),
+            'xbox': ('xbox-lb', 'xbox-rb', 'xbox-a', 'xbox-b'),
+            'keyboard': ('keyboard-page-up', 'keyboard-page-down', 'keyboard-enter', 'keyboard-escape'),
+        }[family]
+        for (name, label), asset in zip(self.glyphs.items(), names):
             label.setFixedSize(size, size)
-            label.setPixmap(QtGui.QIcon(str(ASSETS / f'controller/{name}.svg')).pixmap(size, size))
-        self.setAccessibleName(('L1 or R1, Page Up or Page Down: scroll apps. ' if review else '') +
-                               'Cross or Enter: select. Circle or Escape: back.')
+            label.setPixmap(QtGui.QIcon(str(ASSETS / f'controller/{asset}.svg')).pixmap(size, size))
+        scroll, accept, back = {
+            'playstation': ('L1 or R1', 'Cross', 'Circle'),
+            'xbox': ('LB or RB', 'A', 'B'),
+            'keyboard': ('Page Up or Page Down', 'Enter', 'Escape'),
+        }[family]
+        self.setAccessibleName((scroll + ': scroll apps. ' if review else '') +
+                               accept + ': select. ' + back + ': back.')
+
 
 
 class Overlay(QtWidgets.QWidget):
     def __init__(self, router=None, underlay=None, enable_actions=True, desktop=False):
         super().__init__()
         self.router, self.underlay = router, underlay
+        self.input_family = 'keyboard'
         self.enable_actions = enable_actions
         self.desktop = desktop
         self.request = SwitchRequest(self)
@@ -697,6 +843,7 @@ class Overlay(QtWidgets.QWidget):
         self.resize(1280, 800)
         self.update_metrics()
         if router:
+            router.input_family.connect(self.set_input_family)
             router.action.connect(self.controller)
 
     def update_metrics(self):
@@ -721,12 +868,12 @@ class Overlay(QtWidgets.QWidget):
             if button.property('action'):
                 button.setFixedHeight(unit(68))
         self.setStyleSheet(f"""
-            #panel {{background:#06152E; border:1px solid #314057; border-radius:{unit(24)}px;}}
+            #panel {{background:#06152E; border-radius:{unit(16)}px;}}
             QLabel {{color:#FFF5E2; font-size:{max(14, unit(23))}px; background:transparent;}}
             #wordmark {{font-size:{unit(36)}px; font-weight:bold;}}
             #title {{font-size:{max(24, unit(54))}px; font-weight:bold;}}
             #divider {{background:#526071; border:none;}}
-            QPushButton {{background:#07182F; color:#FFF5E2; border:3px solid #233951;
+            QPushButton {{background:#07182F; color:#FFF5E2;
                 border-radius:{unit(16)}px; font-size:{max(16, unit(28))}px; font-weight:bold;}}
             QPushButton[destructive="true"] {{color:#FFD15A;}}
             QPushButton[selected="true"] {{border:{max(3, unit(5))}px solid #FFF5E2;}}
@@ -736,11 +883,16 @@ class Overlay(QtWidgets.QWidget):
             QScrollBar::handle:vertical {{background:#8191A8; min-height:20px;}}
         """)
 
+    def set_input_family(self, family):
+        if family in ('keyboard', 'xbox', 'playstation') and family != self.input_family:
+            self.input_family = family
+            self.update_footer()
+
     def update_footer(self, size=None):
         if size is None:
             scale = min(self.panel.width() / 1126, self.panel.height() / 688)
             size = max(26, int(40 * scale))
-        self.footer.configure(self.mode in ('confirm', 'closing'), size)
+        self.footer.configure(self.mode in ('confirm', 'closing'), size, self.input_family)
 
     def resizeEvent(self, event):
         self.update_metrics()
@@ -805,6 +957,7 @@ class Overlay(QtWidgets.QWidget):
             try:
                 self.hide_overlay()
             finally:
+                router.input_family.disconnect(self.set_input_family)
                 router.action.disconnect(self.controller)
                 router.close()
         self.status.setText('Controller unavailable: ' + message + '\nUse mouse or keyboard to access HSTN.')
@@ -1010,11 +1163,17 @@ class Overlay(QtWidgets.QWidget):
 
     def event(self, event):
         if event.type() == QtCore.QEvent.KeyPress and event.key() in (QtCore.Qt.Key_Tab, QtCore.Qt.Key_Backtab):
+            self.set_input_family('keyboard')
             self.navigate(-1 if event.key() == QtCore.Qt.Key_Backtab or event.modifiers() & QtCore.Qt.ShiftModifier else 1)
             return True
         return super().event(event)
 
     def keyPressEvent(self, event):
+        if event.key() in (QtCore.Qt.Key_Escape, QtCore.Qt.Key_F8, QtCore.Qt.Key_PageUp,
+                           QtCore.Qt.Key_PageDown, QtCore.Qt.Key_Down, QtCore.Qt.Key_Right,
+                           QtCore.Qt.Key_Up, QtCore.Qt.Key_Left, QtCore.Qt.Key_Return,
+                           QtCore.Qt.Key_Enter, QtCore.Qt.Key_Space, QtCore.Qt.Key_Tab):
+            self.set_input_family('keyboard')
         if event.key() in (QtCore.Qt.Key_Escape,QtCore.Qt.Key_F8):self.cancel_or_hide()
         elif event.key() == QtCore.Qt.Key_PageUp:self.scroll_details(-1)
         elif event.key() == QtCore.Qt.Key_PageDown:self.scroll_details(1)
@@ -1080,6 +1239,14 @@ def main():
             router = None
     underlay=DemoGame() if args.demo else None
     overlay=Overlay(router,underlay,enable_actions=not args.demo,desktop=args.desktop)
+    connections = toast = None
+    if router or args.desktop:
+        toast = ControllerToast(desktop=args.desktop)
+        connections = ControllerConnections()
+        connections.changed.connect(toast.notify)
+        connections.timer.start()
+        app.aboutToQuit.connect(connections.timer.stop)
+        app.aboutToQuit.connect(toast.dismiss)
     if controller_error:
         overlay.disable_controller(controller_error)
     if router:

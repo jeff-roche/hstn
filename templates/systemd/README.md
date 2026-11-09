@@ -25,7 +25,7 @@ overlapping controller ownership even if the UI crashes. The existing root input
 guard remains required. Desktop startup preserves pre-existing InputPlumber
 owners; keyboard/mouse menu access remains available when controller setup fails.
 The focus bridge loads only HSTN's own scoped KWin script and unloads it on exit.
-The overlay service polls for supported USB and Bluetooth DualSense controllers every 1.5 seconds and stays
+The overlay service polls for supported USB and Bluetooth DualSense and Xbox controllers every 1.5 seconds and stays
 running with none attached. Each physical controller gets one virtual PlayStation
 output; owned button/motion/touchpad siblings remain suppressed. Controllers can
 be connected after login or reconnected without restarting the service. Existing

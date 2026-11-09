@@ -77,8 +77,10 @@ class PlayStationOutput:
     def __init__(self, set_targets, *, parent_for=parent_for, required_for=required_for,
                  virtual_devices=virtual_devices, pad_ready=pad_ready,
                  clock=time.monotonic, binding_timeout=10, max_binding_attempts=3,
-                 drain_timeout=15):
+                 drain_timeout=15, primary_source=None, targets=None):
         self.set_targets = set_targets
+        self.primary_source = primary_source or (lambda source: source.startswith('/dev/hidraw'))
+        self.targets = targets or ['ds5', 'mouse', 'keyboard']
         self.parent_for = parent_for
         self.required_for = required_for
         self.virtual_devices = virtual_devices
@@ -102,7 +104,7 @@ class PlayStationOutput:
             for record in group:
                 self.set_targets(record['path'], ['null'])
         except Exception as error:
-            self.fail(f'PlayStation output drain failed: {error}')
+            self.fail(f'Controller output drain failed: {error}')
 
     def fail(self, message):
         self.phase = 'failed'
@@ -111,17 +113,17 @@ class PlayStationOutput:
 
     def update(self, records):
         primaries = [(record, source) for record in records for source in record['sources']
-                     if source.startswith('/dev/hidraw') and self.parent_for(source)]
+                     if self.primary_source(source) and self.parent_for(source)]
         if not primaries:
             return self.plan is None
         if len(primaries) != 1:
-            raise RuntimeError('Single-output PlayStation test requires exactly one physical DualSense per controller group')
+            raise RuntimeError('Controller output requires exactly one primary physical source per controller group')
         primary, source = primaries[0]
         parent = self.parent_for(source)
         group = [r for r in records if r['sources'] and
                  all(self.parent_for(s) == parent for s in r['sources'])]
         if any(not record['owned'] for record in group):
-            raise RuntimeError('Existing owner manages a DualSense source; preserving its outputs')
+            raise RuntimeError('Existing owner manages a supported source; preserving its outputs')
         discovered = {s for record in group for s in record['sources']}
         if not self.required_for(source).issubset(discovered):
             return False
@@ -145,15 +147,15 @@ class PlayStationOutput:
             # Both D-Bus target removal and all UHID roots must acknowledge it.
             if any(record.get('targets') != [] for record in group) or self.virtual_devices():
                 if self.clock() - self.drain_started >= self.drain_timeout:
-                    self.fail('PlayStation output drain timed out; no replacement pad was created')
+                    self.fail('Controller output drain timed out; no replacement pad was created')
                 return False
             self.phase = 'binding'
             self.binding_started = self.clock()
             self.binding_attempts += 1
             try:
-                self.set_targets(primary['path'], ['ds5', 'mouse', 'keyboard'])
+                self.set_targets(primary['path'], self.targets)
             except Exception as error:
-                self.fail(f'PlayStation output binding request failed: {error}')
+                self.fail(f'Controller output binding request failed: {error}')
             return False
         if not self.pad_ready():
             if self.phase == 'ready':
@@ -161,7 +163,7 @@ class PlayStationOutput:
                 self.binding_started = self.clock()
             elif self.clock() - self.binding_started >= self.binding_timeout:
                 if self.binding_attempts >= self.max_binding_attempts:
-                    self.fail(f'PlayStation output failed after {self.binding_attempts} binding attempts')
+                    self.fail(f'Controller output failed after {self.binding_attempts} binding attempts')
                 self.drain(group)
             return False
         self.phase = 'ready'
@@ -185,13 +187,14 @@ class PlayStationOutputs:
     """One output state machine per physical controller; serialize UHID binding."""
     def __init__(self, set_targets, *, parent_for=parent_for, required_for=required_for,
                  virtual_devices=virtual_devices, device_ready=device_ready,
-                 factory=PlayStationOutput):
+                 factory=PlayStationOutput, primary_source=None):
         self.set_targets = set_targets
         self.parent_for = parent_for
         self.required_for = required_for
         self.virtual_devices = virtual_devices
         self.device_ready = device_ready
         self.factory = factory
+        self.primary_source = primary_source or (lambda source: source.startswith('/dev/hidraw'))
         self.controllers = {}
         self.outputs = {}
         self.companions = set()
@@ -217,7 +220,7 @@ class PlayStationOutputs:
             if len(parents) == 1 and None not in parents:
                 groups.setdefault(parents.pop(), []).append(record)
         groups = {parent: group for parent, group in groups.items()
-                  if any(source.startswith('/dev/hidraw') for record in group for source in record['sources'])}
+                  if any(self.primary_source(source) for record in group for source in record['sources'])}
         for parent in set(self.controllers) - set(groups):
             del self.controllers[parent]
             self.outputs.pop(parent, None)

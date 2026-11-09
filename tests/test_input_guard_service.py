@@ -199,7 +199,7 @@ class SourceReservationTest(unittest.TestCase):
                 (1,'pci/usb','0003:0000054C:00000CE6',True),
                 (2,'virtual/misc/uhid','0005:0000054C:00000CE6',True),
                 (3,'virtual/misc/uhid','0003:0000054C:00000CE6',False),
-                (4,'pci/usb','0003:0000045E:000002EA',False),
+                (4,'pci/usb','0003:0000045E:000002EA',True),
             ):
                 device=root/'devices'/location/str(number)
                 device.mkdir(parents=True)

@@ -23,7 +23,7 @@ class SupportedControllersTest(unittest.TestCase):
     def test_supported_usb_and_bluetooth_sources_enable_isolation(self):
         for location, identity, expected in (
             ('pci/usb/pad', '0003:0000054C:00000CE6', True),
-            ('pci/usb/pad', '0003:0000045E:000002EA', False),
+            ('pci/usb/pad', '0003:0000045E:000002EA', True),
             ('bluetooth/pad', '0005:0000054C:00000CE6', True),
             ('virtual/misc/uhid/pad', '0005:0000054C:00000CE6', True),
             ('virtual/misc/uhid/pad', '0005:0000045E:000002EA', False),
@@ -98,3 +98,44 @@ class SupportedControllersTest(unittest.TestCase):
             link.parent.mkdir(parents=True)
             link.symlink_to(device)
             self.assertTrue(controllers.connected(root))
+
+    def test_xbox_input_only_and_virtual_output_exclusion(self):
+        for virtual, bus, product, expected in ((False, '3', 'b12', True),
+                (True, '3', 'b12', False), (True, '5', 'b13', True),
+                (True, '5', 'b20', True),
+                (False, '3', 'b00', False), (True, '5', 'ffff', False)):
+            with self.subTest(virtual=virtual, bus=bus, product=product), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                parent = root/('devices/virtual/input/input1' if virtual else 'devices/pci/usb/input/input1')
+                parent.mkdir(parents=True)
+                (parent/'uevent').write_text(f'PRODUCT={bus}/45e/{product}/1\n')
+                for node in ('event1', 'js1'):
+                    link = root/'class/input'/node/'device'
+                    link.parent.mkdir(parents=True)
+                    link.symlink_to(parent)
+                    self.assertEqual(controllers.supported_parent(node, root), str(parent) if expected else None)
+                self.assertEqual(controllers.connected(root), expected)
+
+    def test_root_helper_detection_matches_user_registry(self):
+        spec = importlib.util.spec_from_file_location('guard_registry', ROOT/'scripts/session-switch-input-guard.py')
+        guard = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(guard)
+        self.assertEqual(guard.SUPPORTED_CONTROLLERS, controllers.SUPPORTED_CONTROLLERS)
+        for identity in controllers.SUPPORTED_CONTROLLERS:
+            for virtual in (True, False):
+                self.assertEqual(guard.source_identity({'HID_ID': identity}, virtual),
+                                 controllers.source_identity({'HID_ID': identity}, virtual))
+
+    def test_physical_snapshot_deduplicates_siblings_and_excludes_virtual_outputs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            device = self.device(root, 'virtual/misc/uhid/bluetooth', '0005:0000045E:00000B13')
+            event = device/'input/input1'
+            event.mkdir(parents=True)
+            link = root/'class/input/event1/device'
+            link.parent.mkdir(parents=True)
+            link.symlink_to(event)
+            snapshot = controllers.physical_controllers(root)
+            self.assertEqual(snapshot, {str(device): {'name': 'Xbox controller', 'transport': 'bluetooth'}})
+            (device/'uevent').write_text('HID_ID=0003:0000045E:00000B12\n')
+            self.assertEqual(controllers.physical_controllers(root), {})

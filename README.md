@@ -9,10 +9,11 @@ with a chance to review running apps before closing them and switching.
 - **Bazzite KDE** with Steam and Heroic Flatpak installed and opened at least once.
 - **Python 3.10+**, Gamescope session-plus, and InputPlumber. The installer checks
   for required software and tells you what is missing.
-- A **DualSense controller** for controller navigation. Connect over USB, or pair
+- A **DualSense, Xbox One, or Xbox Series X|S controller** for controller navigation. Connect over USB, or pair
   through KDE’s Bluetooth settings. The Desktop menu also supports keyboard and mouse.
 
-USB DualSense has been tested on hardware. Bluetooth and multiple-controller
+USB DualSense has been tested on hardware. Xbox support requires live hardware
+validation; it uses the installed Bazzite controller drivers. Bluetooth and multiple-controller
 support have automated tests; live hardware validation is still in progress.
 
 ## Install
@@ -47,11 +48,12 @@ installation, upgrades, and recovery.
 ## Use HSTN
 
 Hold **PS**, then press **Create** to open the menu. Pressing PS alone keeps the
-launcher’s normal behavior.
+launcher’s normal behavior. On Xbox, hold **Xbox**, then press **View**;
+Xbox alone keeps the launcher’s normal behavior.
 
 - Use the **D-pad** to choose Steam, Heroic, or Desktop.
-- Press **Cross** to select. Review any running apps and confirm before closing them.
-- Press **Circle** or **Escape** to dismiss the menu.
+- Press **A / Cross** to select. Review any running apps and confirm before closing them.
+- Press **B / Circle** or **Escape** to dismiss the menu.
 
 On KDE Desktop, use **Open HSTN**, **Switch to Steam**, or **Switch to Heroic** from
 the desktop or application menu. **Save your desktop work before switching**:
@@ -59,6 +61,9 @@ switching away from Desktop logs out the KDE session.
 
 You can connect supported controllers after login. HSTN watches for connections
 and reconnections; Steam and Heroic can start with no controller attached.
+A brief bottom-right HSTN notification shows physical controller connections
+and disconnections, including USB or Bluetooth. Notifications do not take focus;
+connection detection does not establish that controller routing is ready.
 
 ## Need help?
 

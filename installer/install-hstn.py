@@ -28,7 +28,7 @@ LINKS = {
         'switch-to-steam', 'switch-to-heroic', 'switch-to-desktop', 'heroic-gamescope',
         'gamescope-client-with-overlay', 'steam-session-with-overlay', 'heroic-session-with-overlay',
         'wait-controller-isolation.py', 'input-guard-status.py', 'controller-route-snapshot.py',
-        'playstation-output.py', 'supported-controllers.py', 'heroic-window-focus.py', 'session-transition-guard.py',
+        'playstation-output.py', 'controller-outputs.py', 'supported-controllers.py', 'heroic-window-focus.py', 'session-transition-guard.py',
         'capture-doctor.py', 'collect-controller-routes.py', 'collect-gamescope-windows.py')},
 }
 
