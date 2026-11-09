@@ -23,6 +23,11 @@ class DesktopIntegrationTest(unittest.TestCase):
             for path,(content,mode) in desktop:
                 self.assertIn('Type=Application',content)
                 self.assertEqual(mode,0o755)
+            open_entry=files[home/'data/applications/hstn-open.desktop'][0]
+            self.assertIn('Icon='+str(ROOT/'assets/logo/hstn-rocket-256.png'),open_entry)
+            self.assertIn('StartupWMClass=hstn-overlay',open_entry)
+            installed=m.install_files(ROOT,home,home/'data',home/'config',home/'Desk top',runtime_root=home/'runtime')
+            self.assertIn('Icon='+str(home/'runtime/assets/logo/hstn-rocket-256.png'),installed[home/'data/applications/hstn-open.desktop'][0])
             quoted=m.exec_arg('/a space/"$`\\%file')
             self.assertIn('%%',quoted)
             self.assertIn('\\\\$',quoted)
