@@ -30,7 +30,7 @@ sh installer/install.sh -c -y
 
 The normal invocation installs the runtime, commands, session definitions,
 Desktop icons/autostart and user units; requests sudo for a separate system
-phase; starts the Desktop menu hidden; and runs the installed doctor. The system
+phase; starts the Desktop menu hidden; and runs the installed mechanic. The system
 phase stages regular root-owned copies in a root-private temporary directory
 before executing installation code. It installs the input guard, Heroic login
 entry and a dedicated SDDM directory snippet, then validates guard readiness.
@@ -47,14 +47,14 @@ Without an interactive terminal,
 configuration is skipped unless `-y` is supplied. You can configure later with
 `hstn configure --launcher steam` or `hstn configure --launcher heroic`. Ambiguous
 account configuration requires `--steam-config-dir /absolute/path` and/or
-`--heroic-config-dir /absolute/path`. These selections are retained for doctor,
+`--heroic-config-dir /absolute/path`. These selections are retained for mechanic,
 activity checks and later configuration. Both launchers must be installed even
 when library setup is deferred. Multiple Heroic Flatpak deployments are rejected
 rather than silently choosing which deployment to configure.
 
 `--user-only` explicitly skips the system phase. It is useful when an administrator
 has already provisioned the system components; it is not a complete installation
-on a clean system. Doctor still reports missing system prerequisites as failures.
+on a clean system. Mechanic still reports missing system prerequisites as failures.
 
 The source directory can be removed after successful standalone installation.
 Keep it during migration/testing if existing backups point to the old checkout.
@@ -110,7 +110,7 @@ No autonomous update daemon is installed.
 
 ```sh
 hstn install --status
-hstn doctor
+hstn mechanic
 hstn uninstall --dry-run
 hstn uninstall
 ```
@@ -171,7 +171,7 @@ host spawning, systemd including `systemd-inhibit`, and supporting commands.
 Missing requirements stop setup before installation writes. It does not run
 apt/dnf, layer packages, download launchers or change OS images.
 
-After file/service installation, doctor failures mean setup is incomplete, even
+After file/service installation, mechanic failures mean setup is incomplete, even
 though recoverable installed files may remain. WARN/SKIP do not establish live
 controller isolation. Desktop reports omit the Gamescope-only runtime checks.
 Perform Steam and Heroic round trips, repeated restarts, PS/PS+Create, glyphs,

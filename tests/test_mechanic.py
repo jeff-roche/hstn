@@ -12,13 +12,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def load():
-    spec = importlib.util.spec_from_file_location('doctor', ROOT/'scripts/doctor.py')
+    spec = importlib.util.spec_from_file_location('mechanic', ROOT/'scripts/mechanic.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-class DoctorTests(unittest.TestCase):
+class MechanicTests(unittest.TestCase):
     def test_xdg_user_units_and_native_guard_paths(self):
         m = load()
         with tempfile.TemporaryDirectory() as folder:
@@ -101,7 +101,7 @@ class DoctorTests(unittest.TestCase):
     def test_broken_link_and_writable_root_helper_fail(self):
         m = load()
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory)/'helper'; path.symlink_to('/nonexistent/hstn-doctor-test')
+            path = Path(directory)/'helper'; path.symlink_to('/nonexistent/hstn-mechanic-test')
             self.assertEqual(m.file_check(path)[0], 'FAIL')
             path.unlink(); path.write_text('hello'); path.chmod(0o666)
             self.assertEqual(m.file_check(path, trusted=True)[0], 'FAIL')

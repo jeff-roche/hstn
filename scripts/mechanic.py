@@ -272,12 +272,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     checks = collect()
     summary = {status: sum(c['status'] == status for c in checks) for status in ('PASS', 'WARN', 'FAIL', 'SKIP')}
-    report = {'version': 1, 'tool': 'hstn doctor', 'context': 'gamescope' if in_gamescope() else 'desktop',
+    report = {'version': 1, 'tool': 'hstn mechanic', 'context': 'gamescope' if in_gamescope() else 'desktop',
               'ok': summary['FAIL'] == 0, 'summary': summary, 'checks': checks}
     if args.json:
         print(json.dumps(report, indent=2))
     else:
-        print(f'HSTN doctor — {report["context"]} (read-only)')
+        print(f'HSTN mechanic — {report["context"]} (read-only)')
         for item in checks:
             if args.verbose or item['status'] in ('WARN', 'FAIL'):
                 print(f'[{item["status"]}] {item["name"]}: {item["detail"]}')

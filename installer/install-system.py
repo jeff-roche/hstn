@@ -81,7 +81,7 @@ def trusted_destinations(paths):
 
 def system_files(source, root=Path('/'), package=False):
     source, root = Path(source), Path(root)
-    directories = load('doctor').session_dirs(root)
+    directories = load('mechanic').session_dirs(root)
     for name in ('/etc/wayland-sessions', '/usr/local/share/wayland-sessions', '/usr/share/wayland-sessions'):
         if name not in directories:
             directories.append(name)
@@ -191,7 +191,7 @@ def apply_system(source, root=Path('/'), run=command, package=False):
         if changed_guard and run(['/usr/bin/systemctl', 'is-active', UNIT], check=False).stdout.strip() == 'active':
             run(['/usr/bin/systemctl', 'stop', UNIT])
         store.apply(files)
-        if '/etc/wayland-sessions' not in load('doctor').session_dirs(root):
+        if '/etc/wayland-sessions' not in load('mechanic').session_dirs(root):
             raise RuntimeError('Effective SDDM SessionDir still excludes the Heroic session; restore or revise higher-priority configuration')
         run(['/usr/bin/systemctl', 'daemon-reload'])
         verify_service_layout(root, run, package, installed=True)
@@ -372,7 +372,7 @@ def clean_system(source, root=Path('/'), run=command):
 
 def trusted_stage():
     # All executed modules and payloads must be copied to a root-private stage.
-    for name in ('installer/install-system.py', 'installer/install-state.py', 'scripts/doctor.py',
+    for name in ('installer/install-system.py', 'installer/install-state.py', 'scripts/mechanic.py',
                  'scripts/input-guard-status.py', 'scripts/session-switch-input-guard.py',
                  'templates/systemd/session-switch-input-guard.service'):
         path = ROOT/name

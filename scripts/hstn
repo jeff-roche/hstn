@@ -10,7 +10,7 @@ COMMANDS = {
     'setup': ROOT / 'installer/install.py',
     'uninstall': ROOT / 'installer/install.py',
     'desktop': ROOT / 'scripts/desktop-integration.py',
-    'doctor': ROOT / 'scripts/doctor.py',
+    'mechanic': ROOT / 'scripts/mechanic.py',
     'switch': ROOT / 'scripts/session-switch',
     'configure': ROOT / 'scripts/configure-launchers.py',
     'activity': ROOT / 'scripts/game-activity.py',
@@ -25,7 +25,7 @@ Commands:
   setup [options]              Configure a native package for this user
   uninstall [options]          Restore files owned by the installer
   desktop {install,remove,open,hide,status}  Set up or control KDE Desktop HSTN
-  doctor [--json]              Inspect setup without changing anything
+  mechanic [-v] [--json]       Inspect setup without changing anything
   switch {steam|heroic|desktop}  Switch sessions; running games block switching
   configure [options]          Configure launcher shortcuts and artwork
   activity [--check]           Inspect running games without switching

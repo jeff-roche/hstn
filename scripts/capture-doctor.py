@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Consume an explicitly armed one-session HSTN doctor capture request."""
+"""Consume an explicitly armed one-session HSTN mechanic capture request."""
 import argparse
 import datetime
 import json
@@ -40,7 +40,7 @@ def capture(session,parent,state=None,delay=5):
         env=dict(os.environ,XDG_CURRENT_DESKTOP='gamescope',
                  SESSION_SWITCH_INPUT_TARGET=os.environ.get('SESSION_SWITCH_INPUT_TARGET','ds5-single'))
         try:
-            result=subprocess.run([sys.executable,'-B',str(Path(__file__).resolve().with_name('doctor.py')),'--json'],
+            result=subprocess.run([sys.executable,'-B',str(Path(__file__).resolve().with_name('mechanic.py')),'--json'],
                                   env=env,capture_output=True,text=True,timeout=60)
             report['doctor_exit_code']=result.returncode
             report['doctor']=json.loads(result.stdout)
@@ -57,7 +57,7 @@ def capture(session,parent,state=None,delay=5):
         json.dump(report,stream,indent=2)
         stream.write('\n')
         path=Path(stream.name)
-    print(f'HSTN doctor capture saved: {path}',flush=True)
+    print(f'HSTN mechanic capture saved: {path}',flush=True)
     return path
 
 

@@ -319,8 +319,8 @@ def preflight(source, locations, options, configure=False):
     for name in ('X11', 'XRes'):
         if not ctypes.util.find_library(name):
             errors.append(f'Missing required library: {name}')
-    doctor = load('doctor')
-    status, detail = doctor.module_check()
+    mechanic = load('mechanic')
+    status, detail = mechanic.module_check()
     if status != 'PASS':
         errors.append(detail)
     try:
@@ -332,10 +332,10 @@ def preflight(source, locations, options, configure=False):
                 if run(['systemctl', 'is-active', unit], check=False).stdout.strip() != 'active':
                     errors.append(f'Required service is not active: {unit}')
             for name in ('steam', 'heroic'):
-                status, detail = getattr(doctor, name + '_check')()
+                status, detail = getattr(mechanic, name + '_check')()
                 if status != 'PASS':
                     errors.append(f'{name}: {detail}')
-            status, detail = doctor.manager_check()
+            status, detail = mechanic.manager_check()
             if status != 'PASS':
                 errors.append(detail)
             # Reject unsupported effective service overrides before stopping the
@@ -355,7 +355,7 @@ def preflight(source, locations, options, configure=False):
 
 
 def permission_file(locations):
-    status, detail = load('doctor').permission_check()
+    status, detail = load('mechanic').permission_check()
     if status == 'PASS':
         return {}
     if status != 'FAIL':
@@ -384,7 +384,7 @@ def system_phase(action, package=False):
         raise RuntimeError('Invalid root staging path')
     try:
         run(['/usr/bin/sudo', '/usr/bin/install', '-d', '-o', 'root', '-g', 'root', '-m', '0700', stage + '/scripts', stage + '/installer', stage + '/templates/systemd'])
-        for name in ('installer/install-system.py', 'installer/install-state.py', 'scripts/doctor.py',
+        for name in ('installer/install-system.py', 'installer/install-state.py', 'scripts/mechanic.py',
                      'scripts/input-guard-status.py', 'scripts/session-switch-input-guard.py',
                      'templates/systemd/session-switch-input-guard.service'):
             run(['/usr/bin/sudo', '/usr/bin/install', '-o', 'root', '-g', 'root', '-m', '0600', ROOT/name, stage + '/' + name])
@@ -631,7 +631,7 @@ def main(argv=None):
         apply_user(ROOT, locations, plan, package)
         if not args.user_only:
             system_phase('install', package)
-        status, detail = load('doctor').permission_check()
+        status, detail = load('mechanic').permission_check()
         if status != 'PASS':
             raise RuntimeError('Heroic effective permission check failed after setup: ' + detail)
         installed = ROOT if package else locations.runtime
@@ -639,10 +639,10 @@ def main(argv=None):
         update_metadata(locations, phase='configured', selected_configs={k: str(v) for k, v in selected.items()})
         run(['systemctl', '--user', 'daemon-reload'])
         run([sys.executable, '-B', installed/'scripts/desktop-integration.py', 'autostart'])
-        result = run([sys.executable, '-B', installed/'scripts/doctor.py'], check=False, timeout=90)
+        result = run([sys.executable, '-B', installed/'scripts/mechanic.py'], check=False, timeout=90)
         print(result.stdout, end='')
         if result.returncode:
-            raise RuntimeError('Installed doctor reports failures. Installation is recorded; correct prerequisites and retry. ' + result.stderr.strip())
+            raise RuntimeError('Installed mechanic reports failures. Installation is recorded; correct prerequisites and retry. ' + result.stderr.strip())
         update_metadata(locations, phase='complete')
         recover_activity = None
         print('HSTN installation complete.')

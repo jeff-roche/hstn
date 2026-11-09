@@ -7,10 +7,10 @@ acronym is required. The user selected this name on November 7, 2026.
 ## Public tools
 
 `scripts/hstn` is the public entry point: `switch`, `configure`, `activity`,
-`overlay`, and `doctor` forward arguments to their implementations. It resolves its
+`overlay`, and `mechanic` forward arguments to their implementations. It resolves its
 checkout through symlinks and preserves tool exit codes and safety checks.
 The existing `configure-launchers.py` and other direct commands remain usable.
-The read-only `doctor` command checks installation health. `install`, `setup`
+The read-only `mechanic` command checks installation health. `install`, `setup`
 and `uninstall` expose the shared standalone/native-package user lifecycle.
 No force option is provided. See [installation guidance](../installer/INSTALL.md) for ownership boundaries.
 

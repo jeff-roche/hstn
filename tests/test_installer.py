@@ -146,10 +146,10 @@ class InstallerTest(unittest.TestCase):
         self.locations.override.parent.mkdir(parents=True)
         before = '[Session Bus Policy]\norg.freedesktop.Flatpak=none\norg.example.Other=talk\n'
         self.locations.override.write_text(before)
-        doctor = load('doctor')
+        doctor = load('mechanic')
         original_load = self.m.load
         with patch.object(doctor, 'permission_check', return_value=('FAIL', 'denied')):
-            with patch.object(self.m, 'load', side_effect=lambda name, *a: doctor if name == 'doctor' else original_load(name, *a)):
+            with patch.object(self.m, 'load', side_effect=lambda name, *a: doctor if name == 'mechanic' else original_load(name, *a)):
                 permission = self.m.permission_file(self.locations)
         plan = self.m.user_files(self.source, self.locations)
         plan.update(permission)
@@ -387,13 +387,13 @@ class InstallerTest(unittest.TestCase):
             if 'autostart' in strings or 'start' in strings:
                 active = True
             return subprocess.CompletedProcess(args, 0, '', '')
-        doctor = load('doctor')
+        doctor = load('mechanic')
         original_load = self.m.load
         with patch.object(self.m, 'ROOT', self.source), patch.object(self.m.Path, 'home', return_value=self.home), \
              patch.dict(os.environ, self.env), patch.object(self.m.os, 'geteuid', return_value=1000), \
              patch.object(self.m, 'run', side_effect=command), patch.object(self.m, 'preflight', return_value=[]), \
              patch.object(self.m, 'desktop_idle', return_value=[]), patch.object(self.m, 'close_running_launchers') as close_launchers, patch.object(self.m, 'confirm_launcher', return_value=False), patch.object(doctor, 'permission_check', return_value=('PASS', 'allowed')), \
-             patch.object(self.m, 'load', side_effect=lambda name, *a: doctor if name == 'doctor' else original_load(name, *a)):
+             patch.object(self.m, 'load', side_effect=lambda name, *a: doctor if name == 'mechanic' else original_load(name, *a)):
             options = ['-c', '--user-only', '--steam-config-dir', str(steam), '--heroic-config-dir', str(heroic)]
             self.assertEqual(self.m.main(options), 0)
             self.assertTrue(active)
