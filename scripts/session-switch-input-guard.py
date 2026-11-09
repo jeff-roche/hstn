@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Maintain the narrow InputPlumber HID rule correction across sessions.
 
-Installed as root-owned code under /usr/local/libexec. Never enables controller
-management or changes launcher settings. The user-side preflight still verifies
-physical exclusion before starting a launcher with the overlay.
+Installed as root-owned code under /usr/local/libexec. Reserves supported physical
+sources before udev grants session access, including hotplug between sessions.
+Never enables controller management or changes launcher settings.
 """
 import fcntl
 import json
@@ -20,6 +20,40 @@ import time
 RULE_NAME=re.compile(r'(50|96)-inputplumber-hide-(hidraw[0-9]+)-(early|late)\.rules')
 RUNTIME=Path('/run/session-switch-input-guard')
 RULES=Path('/run/udev/rules.d')
+SOURCE_RULE_NAME='72-hstn-controller-sources.rules'
+# Run after 70-uaccess/71-seat, but before 73-seat-late grants the active user's
+# ACL. Final permission assignments also prevent later vendor rules reopening
+# the sources. Match HID ancestry, never reusable hidraw/event numbers. BlueZ
+# UHID sources use bus 0005; InputPlumber's virtual USB outputs use bus 0003.
+SOURCE_RULE='''# HSTN: reserve physical DualSense sources for root InputPlumber.
+ACTION!="add|change", GOTO="hstn_sources_end"
+SUBSYSTEM!="hidraw|input", GOTO="hstn_sources_end"
+KERNEL!="hidraw*|event*|js*|mouse*", GOTO="hstn_sources_end"
+DEVPATH=="/devices/virtual/*", KERNELS=="0003:054C:0CE6.*", GOTO="hstn_sources_end"
+SUBSYSTEMS=="hid", KERNELS=="0003:054C:0CE6.*|0005:054C:0CE6.*", TAG-="uaccess", OWNER:="root", GROUP:="root", MODE:="0600"
+LABEL="hstn_sources_end"
+'''
+
+
+def supported_source_paths(sysfs=Path('/sys')):
+    paths=[]
+    entries=[*sysfs.glob('class/hidraw/hidraw*'), *sysfs.glob('class/input/event*'),
+             *sysfs.glob('class/input/js*'), *sysfs.glob('class/input/mouse*')]
+    for entry in entries:
+        device=(entry/'device').resolve()
+        virtual=Path(sysfs)/'devices/virtual' in device.parents
+        for parent in (device, *device.parents):
+            if parent == Path(sysfs):break
+            try:lines=(parent/'uevent').read_text().splitlines()
+            except OSError:continue
+            if ('HID_ID=0005:0000054C:00000CE6' in lines or
+                    (not virtual and 'HID_ID=0003:0000054C:00000CE6' in lines)):
+                paths.append(str(entry));break
+    return paths
+
+
+def refresh_sources():
+    refresh_paths(supported_source_paths())
 
 
 def correct_rule(text,node):
@@ -46,9 +80,13 @@ def physical_node(node, sysfs=Path('/sys')):
 
 
 def refresh_nodes(nodes):
-    subprocess.run(['udevadm','control','--reload-rules'],check=True,timeout=10)
     paths=[str(Path('/sys/class/hidraw')/node) for node in sorted(nodes)
            if (Path('/sys/class/hidraw')/node).exists()]
+    refresh_paths(paths)
+
+
+def refresh_paths(paths):
+    subprocess.run(['udevadm','control','--reload-rules'],check=True,timeout=10)
     if paths:
         subprocess.run(['udevadm','trigger','--action=change',*paths],check=True,timeout=15)
     subprocess.run(['udevadm','settle','--timeout=15'],check=True,timeout=20)
@@ -63,6 +101,60 @@ def atomic_json(path,data,mode=0o600):
         os.replace(name,path)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+class SourceReservation:
+    """Journal the runtime rule; retain recovery data until udev acknowledges it."""
+    def __init__(self, guard, refresh=refresh_sources):
+        self.guard=guard
+        self.path=guard.rules/SOURCE_RULE_NAME
+        self.journal=guard.state/'source-reservation.json'
+        self.refresh=refresh
+        self.record=None
+        if self.journal.exists() or self.journal.is_symlink():
+            with guard.open_trusted(self.journal,private=True) as stream:
+                self.record=json.load(stream)
+            if (not isinstance(self.record,dict) or self.record.get('version')!=1 or
+                    not isinstance(self.record.get('fingerprint'),(list,type(None)))):
+                raise ValueError('Invalid source reservation journal')
+
+    def owned(self):
+        with self.guard.open_trusted(self.path) as stream:
+            info=os.fstat(stream.fileno())
+            fingerprint=[info.st_dev,info.st_ino]
+            if (not self.record or stream.read(len(SOURCE_RULE)+1)!=SOURCE_RULE or
+                    self.record['fingerprint'] not in (None,fingerprint)):
+                raise ValueError(f'Preserving changed source reservation: {self.path}')
+            return fingerprint
+
+    def install(self):
+        if self.path.exists() or self.path.is_symlink():
+            fingerprint=self.owned()
+        else:
+            # Record intent before linking a complete file into udev's rules.
+            self.record={'version':1,'fingerprint':None}
+            atomic_json(self.journal,self.record)
+            fd,name=tempfile.mkstemp(prefix='.hstn-sources-',dir=self.guard.rules)
+            try:
+                with os.fdopen(fd,'w') as stream:
+                    os.fchmod(stream.fileno(),0o644)
+                    stream.write(SOURCE_RULE);stream.flush();os.fsync(stream.fileno())
+                os.link(name,self.path)  # Refuse a concurrent writer, never overwrite.
+            finally:Path(name).unlink(missing_ok=True)
+            fingerprint=self.owned()
+        self.record={'version':1,'fingerprint':fingerprint}
+        atomic_json(self.journal,self.record)
+        # Also refresh on recovery: a previous reload/trigger may have failed.
+        self.refresh()
+
+    def restore(self):
+        if not self.record:return
+        if self.path.exists() or self.path.is_symlink():
+            self.owned()
+            self.path.unlink()
+        self.refresh()
+        self.journal.unlink()
+        self.record=None
 
 
 class RuleGuard:
@@ -186,12 +278,13 @@ def main():
     lock_fd=os.open(RUNTIME/'lock',os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
     fcntl.flock(lock_fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
     if legacy_active():raise SystemExit('Stop session-switch-input-diagnostic.service before starting the permanent guard.')
-    guard=RuleGuard();running=True;active=RUNTIME/'active'
+    guard=RuleGuard();reservation=SourceReservation(guard);running=True;active=RUNTIME/'active'
     def stop(*_):
         nonlocal running
         running=False
     signal.signal(signal.SIGTERM,stop);signal.signal(signal.SIGINT,stop)
     try:
+        reservation.install()
         guard.scan_once()
         ticks=int(Path('/proc/self/stat').read_text().rsplit(') ',1)[1].split()[19])
         atomic_json(active,{'version':1,'kind':'session-switch-input-guard','pid':os.getpid(),'start_ticks':ticks},0o644)
@@ -199,13 +292,15 @@ def main():
             raise RuntimeError('Could not notify systemd that input guard is ready')
         print('Input guard ready; watching across sessions.',flush=True)
         while running:
+            reservation.owned()
             guard.scan_once();time.sleep(.5)
     finally:
         notify('STOPPING=1')
         active.unlink(missing_ok=True)
         try:
             if not running:
-                guard.restore()
+                try:guard.restore()
+                finally:reservation.restore()
                 print('Input guard stopped; surviving owned rule changes restored.',flush=True)
             else:
                 print('Input guard failed; corrected rules and journal retained for restart.',flush=True)

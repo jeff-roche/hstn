@@ -183,6 +183,15 @@ Bluetooth feedback/suspend/resume, and Steam's built-in power-menu lid-guard
 coverage remain unvalidated. Pair Bluetooth devices through KDE before use;
 the installer does not configure Bluetooth adapters or pairing.
 
+The input guard reserves physical DualSense nodes before session access is granted,
+so Steam cannot open a newly connected controller before HSTN routes it. Steam
+uses the virtual output. This reservation lasts while the guard runs, including
+between sessions; stopping the guard removes its owned runtime rule and restores
+normal access. If HSTN routing is unavailable, use keyboard/mouse for recovery.
+Close Steam and reconnect the controller once when upgrading from a version that
+allowed Steam to open it directly. Startup, hotplug, session round trips and guard
+stop/restart with this reservation still require live hardware acceptance.
+
 ## Building releases and native packages
 
 ```sh

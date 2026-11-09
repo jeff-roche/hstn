@@ -419,6 +419,19 @@ class SystemInstallerTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
 
+    def test_source_reservation_recovery_blocks_removal(self):
+        for relative in ('run/session-switch-input-guard/source-reservation.json',
+                         'run/udev/rules.d/72-hstn-controller-sources.rules'):
+            with self.subTest(relative=relative):
+                path=self.root/relative
+                path.parent.mkdir(parents=True,exist_ok=True)
+                path.write_text('retained recovery data')
+                with self.assertRaisesRegex(RuntimeError,'recovery remains'):
+                    self.m.require_guard_recovery_complete(self.root)
+                self.assertEqual(path.read_text(),'retained recovery data')
+                path.unlink()
+        self.m.require_guard_recovery_complete(self.root)
+
     def test_sddm_plan_preserves_existing_directories_and_does_not_select_session(self):
         config = self.root/'etc/sddm.conf'
         config.parent.mkdir(parents=True)

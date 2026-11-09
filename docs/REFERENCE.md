@@ -49,7 +49,21 @@ Bluetooth sources exposed through BlueZ/UHID are distinguished from HSTN’s vir
 USB outputs. Pair Bluetooth controllers through KDE’s Bluetooth settings first;
 HSTN handles interception after the connection appears.
 
-Close Steam before first enabling Desktop controller management: an already-open
+While the system input guard is running, its runtime udev rule reserves physical
+DualSense HID and input nodes for root InputPlumber before the active user receives
+access. Steam sees HSTN's virtual output after initialization. This covers both
+Desktop startup and controller reconnection while Steam is already running;
+it does not depend on the order of KDE autostart applications. Bluetooth radio
+power and pairing remain controlled by KDE/Steam.
+
+The rule excludes virtual USB outputs and unrelated controllers. Stopping the
+guard removes its owned rule and refreshes supported devices to restore normal
+access. Until the guard is stopped, supported physical controllers require the
+HSTN/InputPlumber route; if that route fails, use the keyboard/mouse menu for
+recovery. Failed restoration retains its journal and prevents uninstall from
+discarding the recovery helper. Do not delete those runtime recovery files.
+
+Close Steam before first enabling or upgrading Desktop controller management: an already-open
 physical device handle bypasses later permission changes. HSTN refuses interception
 when Steam already holds the physical controller; reconnect it with Steam closed.
 Once HSTN is ready, Steam can use the virtual route. Other existing InputPlumber

@@ -237,6 +237,8 @@ def remove_system(root=Path('/'), run=command):
         current_active = run(['/usr/bin/systemctl', 'is-active', UNIT], check=False).stdout.strip()
         if current_active in ('active', 'activating', 'deactivating', 'reloading', 'failed'):
             run(['/usr/bin/systemctl', 'stop', UNIT])
+        require_guard_recovery_complete(root)
+        clean_guard_runtime(root)
         current_enabled = run(['/usr/bin/systemctl', 'is-enabled', UNIT], check=False).stdout.strip()
         if not prior['enabled'] and current_enabled in ('enabled', 'enabled-runtime'):
             run(['/usr/bin/systemctl', 'disable', UNIT])
@@ -249,6 +251,28 @@ def remove_system(root=Path('/'), run=command):
         store.state['metadata']['removed'] = not conflicts
         store.save()
         return conflicts
+
+
+def require_guard_recovery_complete(root):
+    runtime=Path(root)/'run/session-switch-input-guard'
+    reservation=runtime/'source-reservation.json'
+    rule=Path(root)/'run/udev/rules.d/72-hstn-controller-sources.rules'
+    if reservation.exists() or reservation.is_symlink() or rule.exists() or rule.is_symlink():
+        raise RuntimeError('Input source reservation recovery remains after stop; restart and stop the guard successfully before removal')
+    journal=runtime/'backups.json'
+    if journal.exists() and json.loads(journal.read_text()):
+        raise RuntimeError('Input guard recovery journal remains after stop; inspect/recover it before removal')
+
+
+def clean_guard_runtime(root):
+    runtime=Path(root)/'run/session-switch-input-guard'
+    for name in ('backups.json','active','lock'):
+        path=runtime/name
+        if path.exists():
+            if Path(root)==Path('/'):trusted_destinations([path])
+            path.unlink()
+    try:runtime.rmdir()
+    except OSError:pass
 
 
 def legacy_system_files(source, root=Path('/'), check_trust=True):
@@ -330,13 +354,10 @@ def clean_system(source, root=Path('/'), run=command):
     active = run(['/usr/bin/systemctl', 'is-active', UNIT], check=False).stdout.strip()
     if active in ('active', 'activating', 'deactivating', 'failed'):
         run(['/usr/bin/systemctl', 'stop', UNIT])
+    require_guard_recovery_complete(root)
     enabled = run(['/usr/bin/systemctl', 'is-enabled', UNIT], check=False).stdout.strip()
     if enabled in ('enabled', 'enabled-runtime'):
         run(['/usr/bin/systemctl', 'disable', UNIT])
-    # A retained guard journal is recovery data, not disposable install state.
-    guard_journal = root/'run/session-switch-input-guard/backups.json'
-    if guard_journal.exists() and json.loads(guard_journal.read_text()):
-        raise RuntimeError('Input guard recovery journal remains after stop; inspect/recover it before clean-slate removal')
     journal = record_path(root).with_name('cleanup.json')
     allowed = set(files)
     if journal.exists():
@@ -354,14 +375,7 @@ def clean_system(source, root=Path('/'), run=command):
     with state.Store(journal, allowed) as store:
         store.apply({path: None for path in allowed})
     run(['/usr/bin/systemctl', 'daemon-reload'])
-    runtime = root/'run/session-switch-input-guard'
-    for name in ('backups.json', 'active', 'lock'):
-        path = runtime/name
-        if path.exists():
-            if root == Path('/'): trusted_destinations([path])
-            path.unlink()
-    try: runtime.rmdir()
-    except OSError: pass
+    clean_guard_runtime(root)
     for name in ('system-install.json', 'system-install.lock', 'cleanup.json', 'cleanup.lock'):
         path = record_path(root).with_name(name)
         if path.is_symlink(): raise RuntimeError(f'Untrusted root cleanup record: {path}')

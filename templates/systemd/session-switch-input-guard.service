@@ -3,7 +3,7 @@ Description=HSTN InputPlumber HID isolation guard
 Requires=inputplumber.service
 After=inputplumber.service
 PartOf=inputplumber.service
-Before=graphical.target
+Before=display-manager.service graphical.target
 
 [Service]
 Type=notify
@@ -12,7 +12,8 @@ ExecStart=/usr/bin/python3 /usr/local/libexec/session-switch-input-guard.py
 User=root
 RuntimeDirectory=session-switch-input-guard
 RuntimeDirectoryMode=0755
-RuntimeDirectoryPreserve=restart
+# Keep unresolved restoration journals even after an explicit stop.
+RuntimeDirectoryPreserve=yes
 UMask=0077
 Restart=on-failure
 RestartSec=3
