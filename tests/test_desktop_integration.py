@@ -105,7 +105,7 @@ class DesktopIntegrationTest(unittest.TestCase):
 
     def test_open_has_bounded_startup_and_does_not_write_stale_environment(self):
         m=module()
-        with mock.patch.object(m,'ipc',side_effect=[RuntimeError('not ready'),RuntimeError('still not ready')]),mock.patch.object(m,'run') as run,mock.patch.object(m,'gamescope_active',return_value=False):
+        with mock.patch.dict(os.environ,{'XDG_CURRENT_DESKTOP':'KDE'}),mock.patch.object(m,'ipc',side_effect=[RuntimeError('not ready'),RuntimeError('still not ready')]),mock.patch.object(m,'run') as run,mock.patch.object(m,'gamescope_active',return_value=False):
             with self.assertRaises(RuntimeError):m.open_menu()
             self.assertTrue(run.called)
             self.assertIn('start',run.call_args.args[0])

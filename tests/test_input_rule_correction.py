@@ -1,19 +1,21 @@
+"""Rule correction checks use the shipped guard and a synthetic udev rule."""
 import importlib.util
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-class TemporaryInputFixTest(unittest.TestCase):
+class InputRuleCorrectionTest(unittest.TestCase):
     def load(self):
-        spec = importlib.util.spec_from_file_location('fix', ROOT/'prototypes/temporary-input-rule-fix.py')
+        spec = importlib.util.spec_from_file_location('fix', ROOT/'scripts/session-switch-input-guard.py')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
 
     def test_only_corrects_affected_hid_parent_match(self):
         module = self.load()
-        text = (ROOT/'diagnostics/steam-input/50-inputplumber-hide-hidraw1-early.rules.captured').read_text()
+        text = ('ACTION=="add|change", SUBSYSTEMS=="hidraw", KERNEL=="hidraw1", '
+                'KERNELS=="0003:054C:0CE6.000D", GOTO="valid"\n')
         fixed = module.correct_rule(text, 'hidraw1')
         self.assertIn('SUBSYSTEM=="hidraw", KERNEL=="hidraw1", KERNELS==', fixed)
         self.assertEqual(module.correct_rule(fixed, 'hidraw1'), fixed)

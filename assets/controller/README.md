@@ -1,6 +1,6 @@
 # Controller and keyboard prompts
 
-All input symbols used by the overlay are from Kenney's **Input Prompts**
+The button and keyboard prompts used by the overlay are from Kenney's **Input Prompts**
 (1.3), created and distributed by Kenney (https://kenney.nl), under CC0.
 The original package license is preserved in LICENSE.
 
