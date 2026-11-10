@@ -9,6 +9,11 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+NOTICE_FILES = (
+    'LICENSE', 'THIRD_PARTY_NOTICES.md', 'assets/README.md',
+    'assets/controller/LICENSE', 'assets/controller/README.md',
+    'assets/artwork/HEROIC-COPYING',
+)
 
 
 def package_module():
@@ -45,6 +50,8 @@ class PackagingTest(unittest.TestCase):
                 self.assertFalse(any('__pycache__' in n or '.superpowers' in n or 'diagnostics/' in n for n in names))
                 archive.extractall(dest/'extracted', filter='data')
             release = next((dest/'extracted').iterdir())
+            for name in NOTICE_FILES:
+                self.assertEqual((release/name).read_bytes(), (ROOT/name).read_bytes(), name)
             # Instantiate the consumer from the extracted tree: CLI --help alone
             # cannot catch omitted resources loaded only during Desktop startup.
             spec = importlib.util.spec_from_file_location('packaged_desktop_support', release/'scripts/desktop-overlay-support.py')
@@ -77,6 +84,9 @@ class PackagingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             dest = Path(folder)
             package_module().stage(ROOT, dest)
+            for name in NOTICE_FILES:
+                self.assertEqual((dest/'usr/lib/hstn'/name).read_bytes(),
+                                 (ROOT/name).read_bytes(), name)
             self.assertTrue((dest/'usr/lib/hstn/manifest.json').is_file())
             self.assertEqual(os.readlink(dest/'usr/bin/hstn'), '../lib/hstn/scripts/hstn')
             self.assertTrue((dest/'usr/libexec/session-switch-input-guard.py').is_file())
@@ -89,3 +99,10 @@ class PackagingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             with self.assertRaises((ValueError, FileNotFoundError)):
                 package_module().inventory(Path(folder))
+
+    def test_heroic_icon_matches_documented_upstream_source(self):
+        # Replacing this third-party image requires reviewing provenance and
+        # license evidence, not silently retaining the previous asset's notice.
+        icon = ROOT/'assets/artwork/heroic-official-icon.png'
+        self.assertEqual(hashlib.sha256(icon.read_bytes()).hexdigest(),
+                         '35cf28043bcb6e1d4cf290051403566a71914e176a5ce4045aba586003eb0dce')

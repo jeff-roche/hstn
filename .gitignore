@@ -30,5 +30,3 @@ venv/
 !/diagnostics/**/
 !/diagnostics/**/*.md
 !/diagnostics/**/*.py
-# This generic udev sample is required by tests/test_temporary_input_fix.py.
-!/diagnostics/steam-input/50-inputplumber-hide-hidraw1-early.rules.captured

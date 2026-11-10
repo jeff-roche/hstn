@@ -1,5 +1,8 @@
 [
-  "VERSION", "README.md", "installer/INSTALL.md", "docs/BRANDING.md", "docs/DESIGN.md", "docs/REFERENCE.md", "AGENTS.md", "manifest.json", "installer/install.py", "installer/install.sh",
+  "VERSION", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md",
+  "CONTRIBUTING.md", "SUPPORT.md", "docs/RELEASING.md", "assets/README.md",
+  "assets/artwork/HEROIC-COPYING",
+  "installer/INSTALL.md", "docs/BRANDING.md", "docs/DESIGN.md", "docs/REFERENCE.md", "AGENTS.md", "manifest.json", "installer/install.py", "installer/install.sh",
   "installer/files.json", "installer/package.py",
   "scripts/hstn", "scripts/mechanic.py", "scripts/configure-launchers.py",
   "installer/install-hstn.py", "installer/install-system.py", "installer/install-state.py",

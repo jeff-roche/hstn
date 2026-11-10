@@ -102,8 +102,20 @@ and unrelated launcher entries are preserved.
 
 ## Contributing
 
-See [Repository Guidelines](AGENTS.md) for development commands and conventions,
-and the [design guide](docs/DESIGN.md) for artwork guidance.
+See [Contributing](CONTRIBUTING.md) for checks and PR guidance, [Repository
+Guidelines](AGENTS.md) for conventions, and the [design guide](docs/DESIGN.md)
+for artwork guidance. [Support](SUPPORT.md) describes the supported environment
+and response expectations. Changes and known limitations are in the
+[changelog](CHANGELOG.md); release ownership is in [Releasing](docs/RELEASING.md).
+
+## License and artwork
+
+HSTN code, documentation, and the project's rights in its GPT-generated custom
+artwork use the [MIT license](LICENSE). Third-party assets
+keep their own terms, including Kenney's CC0 prompts and Heroic's GPL-3.0-only
+icon; see [third-party notices](THIRD_PARTY_NOTICES.md). The
+[asset inventory](assets/README.md) records sources and the maintainer's
+confirmation of the custom artwork's GPT origin.
 
 ## Legion Go S (experimental)
 

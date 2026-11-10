@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose an improvement or new hardware support.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Describe what you are trying to do and what gets in the way.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior and alternatives
+      description: Include the affected sessions or hardware and any alternatives you have tried.
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Hardware and validation you can provide
+      description: For device support, include the exact model, transport, Bazzite image, and whether you can test it. Omit serial numbers and private captures.

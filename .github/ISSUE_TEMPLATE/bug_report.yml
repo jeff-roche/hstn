@@ -1,0 +1,55 @@
+name: Bug report
+description: Report an installation, controller, overlay, or session switching problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check README.md and SUPPORT.md first, and search existing issues.
+        Save your work before reproducing a session switch: leaving Desktop logs out KDE.
+        Remove usernames, account IDs, tokens, and private window titles from logs and screenshots.
+  - type: input
+    id: version
+    attributes:
+      label: HSTN version or commit
+      description: Use VERSION from the installed runtime or git rev-parse HEAD from your source checkout.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System and installation
+      description: Bazzite image/version, hardware, installation method, and Steam/Heroic versions.
+    validations:
+      required: true
+  - type: dropdown
+    id: session
+    attributes:
+      label: Session where the problem occurs
+      multiple: true
+      options:
+        - Steam
+        - Heroic
+        - KDE Desktop
+        - Installation or removal
+    validations:
+      required: true
+  - type: input
+    id: controller
+    attributes:
+      label: Controller and connection
+      description: Exact model, USB or Bluetooth, number connected, and whether keyboard/mouse still work; write none if irrelevant.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps, expected behavior, and actual behavior
+      description: Include the starting session, destination, and whether this happens on startup, reconnect, or resume.
+    validations:
+      required: true
+  - type: textarea
+    id: mechanic
+    attributes:
+      label: Sanitized mechanic output and relevant logs
+      description: Run hstn mechanic --verbose. If the command is unavailable, include the installer error. Review output before sharing.
+      render: text

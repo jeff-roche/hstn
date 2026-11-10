@@ -217,10 +217,13 @@ refuses to shadow/overwrite a detected native installation. Remove the old setup
 before switching installation methods. Actual RPM/.deb recipes and Debian runtime
 support are not included yet.
 
-Before publishing: choose the project license, review third-party artwork
-redistribution/attribution (including Heroic's official icon), choose the public
-repository/release URLs, set a release version, and complete live acceptance on a
-clean supported installation. This development archive has not been published.
+Release ownership and publication steps are in [Releasing](../docs/RELEASING.md).
+Code uses MIT; third-party asset licenses and notices ship in both package
+formats. Custom artwork's GPT origin is recorded in the
+[asset inventory](../assets/README.md). Before publishing, review any new or
+changed asset sources, set a release version, verify download URLs, and complete
+live acceptance on a clean supported installation. This development archive
+has not been published.
 
 ## Xbox controllers
 
